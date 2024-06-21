@@ -98,7 +98,6 @@ namespace ccf::historical
     enum class RequestStage
     {
       Fetching,
-      Untrusted,
       Trusted,
     };
 
@@ -176,7 +175,7 @@ namespace ccf::historical
 
     using WeakStoreDetailsPtr = std::weak_ptr<StoreDetails>;
     using AllRequestedStores = std::map<ccf::SeqNo, WeakStoreDetailsPtr>;
-
+    using StoreSizes = std::unordered_map<ccf::SeqNo, size_t>;
     struct VersionedSecret
     {
       ccf::SeqNo valid_from = {};
@@ -234,11 +233,13 @@ namespace ccf::historical
         return {};
       }
 
-      void adjust_ranges(
+      std::pair<std::vector<SeqNo>, std::vector<SeqNo>> adjust_ranges(
         const SeqNoCollection& new_seqnos,
         bool should_include_receipts,
         SeqNo earliest_ledger_secret_seqno)
       {
+        std::vector<SeqNo> removed{}, probably_added{};
+
         bool any_diff = false;
 
         // If a seqno is earlier than the earliest known ledger secret, we will
@@ -266,6 +267,7 @@ namespace ccf::historical
             {
               // No longer looking for a seqno which was previously requested.
               // Remove it from my_stores
+              removed.push_back(prev_it->first);
               prev_it = my_stores.erase(prev_it);
               any_diff |= true;
             }
@@ -279,6 +281,7 @@ namespace ccf::historical
               {
                 // If this is too early for known secrets, just record that it
                 // was requested but don't add it to all_stores yet
+                probably_added.push_back(*new_it);
                 prev_it = my_stores.insert_or_assign(prev_it, *new_it, nullptr);
                 any_too_early = true;
               }
@@ -293,6 +296,7 @@ namespace ccf::historical
                   details = std::make_shared<StoreDetails>();
                   all_stores.insert_or_assign(all_it, *new_it, details);
                 }
+                probably_added.push_back(*new_it);
                 prev_it = my_stores.insert_or_assign(prev_it, *new_it, details);
               }
               any_diff |= true;
@@ -311,7 +315,7 @@ namespace ccf::historical
         if (!any_diff && (should_include_receipts == include_receipts))
         {
           HISTORICAL_LOG("Identical to previous request");
-          return;
+          return {removed, probably_added};
         }
 
         include_receipts = should_include_receipts;
@@ -331,6 +335,7 @@ namespace ccf::historical
             populate_receipts(seqno);
           }
         }
+        return {removed, probably_added};
       }
 
       void populate_receipts(ccf::SeqNo new_seqno)
@@ -492,6 +497,102 @@ namespace ccf::historical
     AllRequestedStores all_stores;
 
     ExpiryDuration default_expiry_duration = std::chrono::seconds(1800);
+
+    // Needs explanation?..
+    // Also mention we can't use that for comp as ref because it changes when
+    // deserialisation comes.
+    StoreSizes raw_sizes{};
+    std::vector<CompoundHandle> stupid;
+    std::unordered_map<SeqNo, std::set<CompoundHandle>> parents;
+    CacheSize remembered_size{0};
+    CacheSize soft_limit{0};
+
+    void add_ref(SeqNo seq, CompoundHandle handle)
+    {
+      auto it = parents.find(seq);
+      if (it == parents.end())
+      {
+        parents.insert({seq, {handle}});
+        auto size = raw_sizes.find(seq);
+        if (size != raw_sizes.end())
+        {
+          remembered_size += size->second;
+        }
+      }
+      else
+      {
+        it->second.insert(handle);
+      }
+    }
+
+    void add_refs(CompoundHandle handle)
+    {
+      for (const auto& [seq, _] : requests.at(handle).my_stores)
+      {
+        add_ref(seq, handle);
+      }
+    }
+
+    void remove_ref(SeqNo seq, CompoundHandle handle)
+    {
+      auto it = parents.find(seq);
+      assert(it != parents.end());
+
+      it->second.erase(handle);
+      if (it->second.empty())
+      {
+        parents.erase(it);
+        auto size = raw_sizes.find(seq);
+        if (size != raw_sizes.end())
+        {
+          remembered_size -= size->second;
+          raw_sizes.erase(size);
+        }
+      }
+    }
+
+    void remove_refs(CompoundHandle handle)
+    {
+      for (const auto& [seq, _] : requests.at(handle).my_stores)
+      {
+        remove_ref(seq, handle);
+      }
+    }
+
+    void use(CompoundHandle handle)
+    {
+      auto it = std::find(stupid.begin(), stupid.end(), handle);
+      if (it == stupid.end()) // New on top
+      {
+        stupid.insert(stupid.begin(), handle);
+        add_refs(handle);
+      }
+      else
+      { // Topify
+        stupid.erase(it);
+        stupid.insert(stupid.begin(), handle);
+      }
+    }
+
+    void evict(CompoundHandle handle)
+    {
+      auto it = std::find(stupid.begin(), stupid.end(), handle);
+      if (it != stupid.end())
+      {
+        remove_refs(handle);
+        stupid.erase(it);
+      }
+    }
+
+    void update_store_raw_size(SeqNo seq, size_t new_size)
+    {
+      auto& stored_size = raw_sizes[seq];
+      assert(!stored_size || stored_size == new_size);
+
+      remembered_size -= stored_size;
+      remembered_size += new_size;
+      stored_size = new_size;
+    }
 
     void fetch_entry_at(ccf::SeqNo seqno)
     {
@@ -757,6 +858,7 @@ namespace ccf::historical
       {
         // This is a new handle - insert a newly created Request for it
         it = requests.emplace_hint(it, handle, Request(all_stores));
+        use(handle);
         HISTORICAL_LOG("First time I've seen handle {}", handle);
       }
 
@@ -772,8 +874,17 @@ namespace ccf::historical
         seqnos.size(),
         *seqnos.begin(),
         include_receipts);
-      request.adjust_ranges(
+      auto [removed, probably_added] = request.adjust_ranges(
         seqnos, include_receipts, earliest_secret_.valid_from);
+
+      for (auto seq : removed)
+      {
+        remove_ref(seq, handle);
+      }
+      for (auto seq : probably_added)
+      {
+        add_ref(seq, handle);
+      }
 
       // If the earliest target entry cannot be deserialised with the earliest
       // known ledger secret, record the target seqno and begin fetching the
@@ -823,6 +934,7 @@ namespace ccf::historical
       {
         if (request_it->second.get_store_details(seqno) != nullptr)
         {
+          evict(request_it->first);
           request_it = requests.erase(request_it);
         }
         else
@@ -977,6 +1089,11 @@ namespace ccf::historical
       default_expiry_duration = duration;
     }
 
+    void set_soft_cache_limit(CacheSize cache_limit)
+    {
+      soft_limit = cache_limit;
+    }
+
     void track_deletes_on_missing_keys(bool track)
     {
       track_deletes_on_missing_keys_v = track;
@@ -985,6 +1102,7 @@ namespace ccf::historical
     bool drop_cached_states(const CompoundHandle& handle)
     {
       std::lock_guard<ccf::pal::Mutex> guard(requests_lock);
+      evict(handle);
       const auto erased_count = requests.erase(handle);
       HISTORICAL_LOG("Dropping historical request {}", handle);
       return erased_count > 0;
@@ -1094,6 +1212,7 @@ namespace ccf::historical
         std::move(claims_digest),
         has_commit_evidence);
 
+      update_store_raw_size(seqno, size);
       return true;
     }
 
@@ -1245,6 +1364,7 @@ namespace ccf::historical
           {
             LOG_DEBUG_FMT(
               "Dropping expired historical query with handle {}", it->first);
+            evict(it->first);
             it = requests.erase(it);
           }
           else
@@ -1253,6 +1373,32 @@ namespace ccf::historical
             ++it;
           }
         }
+      }
+
+      size_t avg = raw_sizes.empty() ?
+        0 :
+        (std::accumulate(
+           raw_sizes.begin(),
+           raw_sizes.end(),
+           0ll,
+           [&](size_t current, const auto& item) {
+             return current + item.second;
+           }) /
+         raw_sizes.size());
+      LOG_INFO_FMT(
+        "3x3x remembered size {}, raw_sizes cnt {}, avg raw size {}",
+        remembered_size,
+        raw_sizes.size(),
+        avg);
+
+      while (soft_limit && remembered_size > soft_limit)
+      {
+        assert(false); // Never called in the test
+        assert(!stupid.empty());
+        auto handle = stupid.back();
+        evict(handle);
+        requests.erase(handle);
+        stupid.pop_back();
       }
 
       {
@@ -1432,6 +1578,11 @@ namespace ccf::historical
     void set_default_expiry_duration(ExpiryDuration duration) override
     {
       StateCacheImpl::set_default_expiry_duration(duration);
+    }
+
+    void set_soft_cache_limit(CacheSize cache_limit) override
+    {
+      StateCacheImpl::set_soft_cache_limit(cache_limit);
     }
 
     void track_deletes_on_missing_keys(bool track) override
