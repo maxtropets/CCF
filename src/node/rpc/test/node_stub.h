@@ -161,6 +161,8 @@ namespace ccf
       historical::ExpiryDuration seconds_until_expiry)
     {}
 
+    void set_soft_cache_limit(historical::CacheSize seconds_until_expiry){};
+
     void track_deletes_on_missing_keys(bool track) {}
 
     kv::ReadOnlyStorePtr get_store_at(
