@@ -98,7 +98,6 @@ namespace ccf::historical
     enum class RequestStage
     {
       Fetching,
-      Untrusted,
       Trusted,
     };
 
@@ -176,7 +175,7 @@ namespace ccf::historical
 
     using WeakStoreDetailsPtr = std::weak_ptr<StoreDetails>;
     using AllRequestedStores = std::map<ccf::SeqNo, WeakStoreDetailsPtr>;
-
+    using StoreSizes = std::unordered_map<ccf::SeqNo, size_t>;
     struct VersionedSecret
     {
       ccf::SeqNo valid_from = {};
@@ -493,6 +492,48 @@ namespace ccf::historical
 
     ExpiryDuration default_expiry_duration = std::chrono::seconds(1800);
 
+    // Needs explanation?..
+    // Also mention we can't use that for comp as ref because it changes when
+    // deserialisation comes.
+    StoreSizes raw_sizes{};
+    std::vector<CompoundHandle> stupid;
+    using CacheSize = size_t;
+    CacheSize remembered_size{0};
+    CacheSize soft_limit{0};
+
+    void use(CompoundHandle handle)
+    {
+      auto it = std::find(stupid.begin(), stupid.end(), handle);
+      if (it == stupid.end()) // New on top
+      {
+        stupid.insert(stupid.begin(), handle);
+      }
+      else
+      { // Topify
+        stupid.erase(it);
+        stupid.insert(stupid.begin(), handle);
+      }
+    }
+
+    void evict(CompoundHandle handle)
+    {
+      auto it = std::find(stupid.begin(), stupid.end(), handle);
+      if (it != stupid.end())
+      {
+        stupid.erase(it);
+      }
+    }
+
+    void update_store_raw_size(SeqNo seq, size_t new_size)
+    {
+      auto& stored_size = raw_sizes[seq];
+      assert(!stored_size || stored_size == new_size);
+
+      remembered_size -= stored_size;
+      remembered_size += new_size;
+      stored_size = new_size;
+    }
+
     void fetch_entry_at(ccf::SeqNo seqno)
     {
       fetch_entries_range(seqno, seqno);
@@ -757,6 +798,7 @@ namespace ccf::historical
       {
         // This is a new handle - insert a newly created Request for it
         it = requests.emplace_hint(it, handle, Request(all_stores));
+        use(handle);
         HISTORICAL_LOG("First time I've seen handle {}", handle);
       }
 
@@ -823,6 +865,7 @@ namespace ccf::historical
       {
         if (request_it->second.get_store_details(seqno) != nullptr)
         {
+          evict(request_it->first);
           request_it = requests.erase(request_it);
         }
         else
@@ -985,6 +1028,7 @@ namespace ccf::historical
     bool drop_cached_states(const CompoundHandle& handle)
     {
       std::lock_guard<ccf::pal::Mutex> guard(requests_lock);
+      evict(handle);
       const auto erased_count = requests.erase(handle);
       HISTORICAL_LOG("Dropping historical request {}", handle);
       return erased_count > 0;
@@ -1094,6 +1138,7 @@ namespace ccf::historical
         std::move(claims_digest),
         has_commit_evidence);
 
+      update_store_raw_size(seqno, size);
       return true;
     }
 
@@ -1245,6 +1290,7 @@ namespace ccf::historical
           {
             LOG_DEBUG_FMT(
               "Dropping expired historical query with handle {}", it->first);
+            evict(it->first);
             it = requests.erase(it);
           }
           else
