@@ -49,6 +49,8 @@ namespace ccf::historical
 
   using ExpiryDuration = std::chrono::seconds;
 
+  using CacheSize = size_t;
+
   /** Stores the progress of historical query requests.
    *
    * A request will generally need to be made multiple times (with the same
@@ -78,6 +80,10 @@ namespace ccf::historical
      */
     virtual void set_default_expiry_duration(
       ExpiryDuration seconds_until_expiry) = 0;
+
+    /** TODO
+     */
+    virtual void set_soft_cache_limit(CacheSize seconds_until_expiry) = 0;
 
     /** EXPERIMENTAL: Set the tracking of deletes on missing keys for historical
      * queries.
