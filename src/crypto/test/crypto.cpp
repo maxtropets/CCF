@@ -1221,7 +1221,7 @@ TEST_CASE("COSE sign & verify")
 {
   std::shared_ptr<KeyPair_OpenSSL> kp =
     std::dynamic_pointer_cast<KeyPair_OpenSSL>(
-      ccf::crypto::make_key_pair(CurveID::SECP384R1));
+      ccf::crypto::make_key_pair(CurveID::SECP256R1));
 
   std::vector<uint8_t> payload{1, 10, 42, 43, 44, 45, 100};
   const std::unordered_map<int64_t, std::string> protected_headers = {
@@ -1240,6 +1240,27 @@ TEST_CASE("COSE sign & verify")
     for (uint8_t x : payload)
       std::cout << static_cast<int>(x) << ' ';
     std::cout << std::endl;
+  }
+
+  {
+    std::ofstream b_stream(
+      "cose_test.cose", std::fstream::out | std::fstream::binary);
+    b_stream.write((const char*)cose_sign.data(), cose_sign.size());
+    b_stream.close();
+  }
+
+  {
+    std::ofstream b_stream(
+      "cose_test.payload", std::fstream::out | std::fstream::binary);
+    b_stream.write((const char*)payload.data(), payload.size());
+    b_stream.close();
+  }
+
+  {
+    auto pem = kp->public_key_pem().str();
+    std::ofstream b_stream("cose_test.key", std::fstream::out);
+    b_stream << pem;
+    b_stream.close();
   }
 
   require_match_headers(protected_headers, cose_sign);
