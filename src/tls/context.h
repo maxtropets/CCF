@@ -11,6 +11,8 @@
 #include <openssl/bio.h>
 #include <openssl/ssl.h>
 
+// #define OPENSSL_NO_DEPRECATED
+
 namespace ccf::tls
 {
   class Context
@@ -136,6 +138,9 @@ namespace ccf::tls
       if (len == 0)
         return 0;
       size_t readbytes = 0;
+
+      printf("PATTERN read request\n");
+      fflush(stdout);
       int rc = SSL_read_ex(ssl, buf, len, &readbytes);
       if (rc > 0)
       {
@@ -145,6 +150,8 @@ namespace ccf::tls
       {
         return TLS_ERR_WANT_READ;
       }
+      printf("PATTERN bad rc xxx SSL rc: %d\n", rc);
+      fflush(stdout);
 
       // Everything else falls here.
       LOG_TRACE_FMT("Context::read() : Error code {}", rc);

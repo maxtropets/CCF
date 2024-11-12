@@ -680,6 +680,7 @@ namespace ccf
       (void)argi;
       (void)argl;
 
+      std::cout << "OPER " << oper << std::endl;
       if (ret == 1 && oper == (BIO_CB_CTRL | BIO_CB_RETURN))
       {
         // This callback may be fired at the end of large batches of TLS frames
@@ -691,18 +692,21 @@ namespace ccf
       if (ret && (oper == (BIO_CB_READ | BIO_CB_RETURN)))
       {
         // Pipe object
+        std::cout << "OK FOUND pipe in" << std::endl;
         void* ctx = (BIO_get_callback_arg(b));
         int got = recv_callback(ctx, (uint8_t*)argp, len);
 
         // WANTS_READ
         if (got == TLS_READING)
         {
+          std::cout << "OK FOUND pipe wants read!" << std::endl;
           LOG_TRACE_FMT("TLS Session::recv_cb() : WANTS_READ");
           *processed = 0;
           return -1;
         }
         else
         {
+          std::cout << "OK FOUND pipe OK?.." << got << ":" << len << std::endl;
           LOG_TRACE_FMT(
             "TLS Session::recv_cb() : Got {} bytes of {}", got, len);
         }
@@ -710,9 +714,13 @@ namespace ccf
         // If got less than requested, return WANT_READ
         if ((size_t)got < len)
         {
+          std::cout << "OK FOUND If got less than requested, return WANT_READ"
+                    << std::endl;
           *processed = got;
           return 1;
         }
+
+        std::cout << "OK FOUND NEXT?...." << std::endl;
 
         // Write to the actual BIO so SSL can use it
         BIO_write_ex(b, argp, got, processed);
@@ -720,6 +728,7 @@ namespace ccf
         // The buffer should be enough, we can't return WANT_WRITE here
         if ((size_t)got != *processed)
         {
+          std::cout << "OK FOUND buff truncated" << std::endl;
           LOG_TRACE_FMT("TLS Session::recv_cb() : BIO error");
           *processed = got;
           return -1;
@@ -730,10 +739,11 @@ namespace ccf
         // buffer is empty and needs an external read, so let's not log this.
         if (got > 0 && ret < 0)
         {
+          std::cout << "OK FOUND final" << std::endl;
           return 1;
         }
       }
-
+      std::cout << "OK FOUND final ret " << ret << std::endl;
       // Unless we detected an error, the return value is always the same as the
       // original operation.
       return ret;
