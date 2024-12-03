@@ -3,6 +3,7 @@
 
 #include "ccf/endpoints/authentication/jwt_auth.h"
 
+#include "ccf/crypto/rsa_key_pair.h"
 #include "ccf/ds/nonstd.h"
 #include "ccf/pal/locking.h"
 #include "ccf/rpc_context.h"
@@ -82,26 +83,24 @@ namespace ccf
     return tenant_id && tid && *tid == *tenant_id;
   }
 
-  struct VerifiersCache
+  struct PublicKeysCache
   {
-    static constexpr size_t DEFAULT_MAX_VERIFIERS = 10;
+    static constexpr size_t DEFAULT_MAX_KEYS = 10;
 
     using DER = std::vector<uint8_t>;
-    ccf::pal::Mutex verifiers_lock;
-    LRU<DER, ccf::crypto::VerifierPtr> verifiers;
+    ccf::pal::Mutex keys_lock;
+    LRU<DER, ccf::crypto::RSAPublicKeyPtr> keys;
 
-    VerifiersCache(size_t max_verifiers = DEFAULT_MAX_VERIFIERS) :
-      verifiers(max_verifiers)
-    {}
+    PublicKeysCache(size_t max_keys = DEFAULT_MAX_KEYS) : keys(max_keys) {}
 
-    ccf::crypto::VerifierPtr get_verifier(const DER& der)
+    ccf::crypto::RSAPublicKeyPtr get_key(const DER& der)
     {
-      std::lock_guard<ccf::pal::Mutex> guard(verifiers_lock);
+      std::lock_guard<ccf::pal::Mutex> guard(keys_lock);
 
-      auto it = verifiers.find(der);
-      if (it == verifiers.end())
+      auto it = keys.find(der);
+      if (it == keys.end())
       {
-        it = verifiers.insert(der, ccf::crypto::make_unique_verifier(der));
+        it = keys.insert(der, ccf::crypto::make_rsa_public_key(der));
       }
 
       return it->second;
@@ -109,7 +108,7 @@ namespace ccf
   };
 
   JwtAuthnPolicy::JwtAuthnPolicy() :
-    verifiers(std::make_unique<VerifiersCache>())
+    keys_cache(std::make_unique<PublicKeysCache>())
   {}
 
   JwtAuthnPolicy::~JwtAuthnPolicy() = default;
@@ -141,11 +140,14 @@ namespace ccf
       auto fallback_issuers = tx.ro<Tables::Legacy::JwtPublicSigningKeyIssuer>(
         ccf::Tables::Legacy::JWT_PUBLIC_SIGNING_KEY_ISSUER);
 
-      auto fallback_key = fallback_keys->get(key_id);
-      if (fallback_key)
+      auto fallback_cert = fallback_keys->get(key_id);
+      if (fallback_cert)
       {
+        // Legacy keys are stored as certs, new approach is raw keys, so
+        // conversion is needed to implicitly work futher down the code.
+        auto verifier = ccf::crypto::make_unique_verifier(*fallback_cert);
         token_keys = std::vector<OpenIDJWKMetadata>{OpenIDJWKMetadata{
-          .cert = *fallback_key,
+          .public_key = verifier->public_key_der(),
           .issuer = *fallback_issuers->get(key_id),
           .constraint = std::nullopt}};
       }
@@ -160,8 +162,22 @@ namespace ccf
 
     for (const auto& metadata : *token_keys)
     {
-      auto verifier = verifiers->get_verifier(metadata.cert);
-      if (!::http::JwtVerifier::validate_token_signature(token, verifier))
+      if (!metadata.public_key.has_value())
+      {
+        error_reason =
+          fmt::format("Missing public key for a given kid: {}", key_id);
+        continue;
+      }
+
+      const auto pubkey = keys_cache->get_key(metadata.public_key.value());
+      // Obsolote PKCS1 padding is chosen for JWT, as explained in details here:
+      // https://github.com/microsoft/CCF/issues/6601#issuecomment-2512059875.
+      if (!pubkey->verify_pkcs1(
+            (uint8_t*)token.signed_content.data(),
+            token.signed_content.size(),
+            token.signature.data(),
+            token.signature.size(),
+            ccf::crypto::MDType::SHA256))
       {
         error_reason = "Signature verification failed";
         continue;

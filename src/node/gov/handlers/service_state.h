@@ -578,11 +578,13 @@ namespace ccf::gov::endpoints
                 {
                   auto info = nlohmann::json::object();
 
-                  // cert is stored as DER - convert to PEM for API
-                  const auto cert_pem =
-                    ccf::crypto::cert_der_to_pem(metadata.cert);
-                  info["certificate"] = cert_pem.str();
-
+                  if (metadata.public_key.has_value())
+                  {
+                    info["publicKey"] = ccf::crypto::make_rsa_public_key(
+                                          metadata.public_key.value())
+                                          ->public_key_pem()
+                                          .str();
+                  }
                   info["issuer"] = metadata.issuer;
                   info["constraint"] = metadata.constraint;
 
