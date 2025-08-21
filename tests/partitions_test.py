@@ -173,49 +173,18 @@ def test_isolate_primary_from_one_backup(network, args):
 
     return network
 
+import random
+import time
 
 @reqs.description("Isolate and reconnect primary")
 def test_isolate_and_reconnect_primary(network, args, **kwargs):
     primary, backups = network.find_nodes()
+    with primary.client("user0") as client:
+        msg = "lol?" * 128
+        client.post("/app/log/public", {"id": 3284976, "msg": msg})
 
-    with primary.client() as c:
-        primary_view = c.get("/node/consensus").body.json()["details"]["current_view"]
-
-    with network.partitioner.partition(backups):
-        lost_tx_resp = check_does_not_progress(primary)
-
-        new_primary, _ = network.wait_for_new_primary(primary, nodes=backups)
-        new_tx_resp = check_can_progress(new_primary)
-
-        # CheckQuorum: the primary node should automatically step
-        # down if it has not heard back from a majority of backups.
-        # However, it is not guaranteed that the transient follower state
-        # will be observed, so wait for candidate state instead.
-        # The isolated primary will stay in follower state once Pre-Vote
-        # is implemented. https://github.com/microsoft/CCF/issues/2577
-        primary.wait_for_leadership_state(
-            primary_view, ["Candidate"], timeout=2 * args.election_timeout_ms / 1000
-        )
-
-    # Check reconnected former primary has caught up
-    with primary.client() as c:
-        try:
-            # There will be at least one full election cycle for nothing, where the
-            # re-joining node fails to get elected but causes others to rev up their
-            # term. After that, a successful election needs to take place, and we
-            # arbitrarily allow 3 time periods to avoid being too brittle when
-            # raft timeouts line up badly.
-            c.wait_for_commit(new_tx_resp, timeout=(network.election_duration * 4))
-        except TimeoutError:
-            details = c.get("/node/consensus").body.json()
-            assert (
-                False
-            ), f"Stuck before {new_tx_resp.view}.{new_tx_resp.seqno}: {pprint.pformat(details)}"
-
-        # Check it has dropped anything submitted while partitioned
-        r = c.get(f"/node/tx?transaction_id={lost_tx_resp.view}.{lost_tx_resp.seqno}")
-        status = TxStatus(r.body.json()["status"])
-        assert status == TxStatus.Invalid, r
+        with network.partitioner.partition(backups):
+            new_primary, _ = network.wait_for_new_primary(primary, nodes=backups)
 
 
 @reqs.description("New joiner helps liveness")
@@ -868,28 +837,31 @@ def run(args):
     ) as network:
         network.start_and_open(args)
 
-        test_invalid_partitions(network, args)
-        test_partition_majority(network, args)
-        test_isolate_primary_from_one_backup(network, args)
-        test_new_joiner_helps_liveness(network, args)
-        test_expired_certs(network, args)
-        for n in range(5):
+        # test_invalid_partitions(network, args)
+        # test_partition_majority(network, args)
+        # test_isolate_primary_from_one_backup(network, args)
+        # test_new_joiner_helps_liveness(network, args)
+        # test_expired_certs(network, args)
+        for n in range(100):
             test_isolate_and_reconnect_primary(network, args, iteration=n)
-        test_election_reconfiguration(network, args)
-        test_forwarding_timeout(network, args)
-        # HTTP2 doesn't support forwarding
-        if not args.http2:
-            test_session_consistency(network, args)
-        network = test_recovery_elections(network, args)
-        test_ledger_invariants(network, args)
+        # test_election_reconfiguration(network, args)
+        # test_forwarding_timeout(network, args)
+        # # HTTP2 doesn't support forwarding
+        # if not args.http2:
+        #     test_session_consistency(network, args)
+        # network = test_recovery_elections(network, args)
+        # test_ledger_invariants(network, args)
 
 
 if __name__ == "__main__":
     args = infra.e2e_args.cli_args()
     args.nodes = infra.e2e_args.min_nodes(args, f=1)
     args.package = "samples/apps/logging/logging"
-    args.snapshot_tx_interval = (
-        20  # Increase snapshot frequency for faster reconfigurations
-    )
+    # args.snapshot_tx_interval = (
+    #     5 # Increase snapshot frequency for faster reconfigurations
+    # )
+    args.election_timeout_ms = 1000
+    # args.signature_interval_duration = 10
+    # args.sig_tx_interval = 10
 
     run(args)

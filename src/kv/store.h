@@ -1030,6 +1030,16 @@ namespace ccf::kv
         offset++;
       }
 
+      if (globally_committable)
+      {
+        std::cout << "Actually, sleep and read last_repl " << last_replicated
+                  << std::endl;
+        std::this_thread::sleep_for(
+          std::chrono::milliseconds(100 + rand() % 1000));
+        std::cout << "Actually, sleep and read last_repl " << last_replicated
+                  << std::endl;
+      }
+
       if (c->replicate(batch, replication_view))
       {
         std::lock_guard<ccf::pal::Mutex> vguard(version_lock);
