@@ -1436,7 +1436,12 @@ install(
   DESTINATION ${CMAKE_INSTALL_PREFIX}/cmake
 )
 
-if(NOT USE_LIBCXX)
+option(ENABLE_PERF_SUBMITTER
+  "Build the perf-system submitter tool (requires libarrow-devel and parquet-libs-devel)"
+  ON
+)
+
+if(ENABLE_PERF_SUBMITTER AND NOT USE_LIBCXX)
   # Perf tool executable
   include(${CCF_DIR}/tests/perf-system/submitter/CMakeLists.txt)
 endif()

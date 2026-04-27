@@ -36,8 +36,6 @@
 #include "rpc_sessions.h"
 #include "tasks/worker.h"
 
-#include <openssl/engine.h>
-
 namespace ccf
 {
   class Enclave

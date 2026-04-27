@@ -3,14 +3,39 @@
 # Licensed under the Apache 2.0 License.
 
 set -ex
+set -o pipefail
 
-tdnf -y install  \
-    clang-tools-extra  \
-    python-pip \
-    jq \
-    tar \
-    npm \
-    build-essential
+# Detect Azure Linux version
+AZL_VERSION_ID="$(. /etc/os-release && echo "$VERSION_ID")"
+case "$AZL_VERSION_ID" in
+    3.*) AZL_MAJOR=3 ;;
+    4.*) AZL_MAJOR=4 ;;
+    *)
+        echo "ERROR: Unsupported Azure Linux version '$AZL_VERSION_ID'."
+        exit 1
+        ;;
+esac
+
+if [[ "$AZL_MAJOR" -eq 3 ]]; then
+    tdnf -y install  \
+        clang-tools-extra  \
+        python-pip \
+        jq \
+        tar \
+        npm \
+        build-essential
+else
+    tdnf -y install  \
+        clang-tools-extra  \
+        python3-pip \
+        jq \
+        tar \
+        nodejs-npm \
+        gcc \
+        gcc-c++ \
+        make \
+        binutils
+fi
 
 # For LTS test to extract binaries from rpms
 tdnf -y install cpio
