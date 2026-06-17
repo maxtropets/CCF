@@ -21,6 +21,7 @@
 #include <parquet/arrow/writer.h>
 #include <signal.h>
 #include <time.h>
+#include <utility>
 
 
 using namespace std;
@@ -320,7 +321,8 @@ int main(int argc, char** argv)
         connection->write({request.data(), request.size()});
         if (
           connection->bytes_available() or
-          ridx - read_reqs >= args.max_inflight_requests)
+          std::cmp_greater_equal(
+            ridx - read_reqs, args.max_inflight_requests))
         {
           responses[read_reqs] = connection->read_response();
           clock_gettime(CLOCK_REALTIME, &end[read_reqs]);
