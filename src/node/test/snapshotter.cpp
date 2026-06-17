@@ -137,7 +137,7 @@ void record_snapshot_evidence(
   size_t evidence_idx)
 {
   snapshotter->record_snapshot_evidence_idx(
-    evidence_idx, ccf::SnapshotHash{.version = snapshot_idx});
+    evidence_idx, ccf::SnapshotHash{.hash = {}, .version = snapshot_idx});
 }
 
 TEST_CASE("Regular snapshotting")
@@ -198,8 +198,9 @@ TEST_CASE("Regular snapshotting")
     REQUIRE(read_latest_snapshot_evidence(network.tables) == snapshot_idx);
     auto snapshot_allocate_msg = read_snapshot_allocate_out(eio);
     REQUIRE(snapshot_allocate_msg.has_value());
-    auto [snapshot_idx, snapshot_size, snapshot_count] =
+    auto [allocated_snapshot_idx, snapshot_size, snapshot_count] =
       snapshot_allocate_msg.value();
+    REQUIRE(allocated_snapshot_idx == snapshot_idx);
 
     // Incorrect generation count
     {
@@ -236,8 +237,9 @@ TEST_CASE("Regular snapshotting")
     REQUIRE(read_latest_snapshot_evidence(network.tables) == snapshot_idx);
     auto snapshot_allocate_msg = read_snapshot_allocate_out(eio);
     REQUIRE(snapshot_allocate_msg.has_value());
-    auto [snapshot_idx, snapshot_size, snapshot_count] =
+    auto [allocated_snapshot_idx, snapshot_size, snapshot_count] =
       snapshot_allocate_msg.value();
+    REQUIRE(allocated_snapshot_idx == snapshot_idx);
 
     // Commit before snapshot is stored has no effect
     issue_transactions(network, 1);
@@ -285,8 +287,9 @@ TEST_CASE("Regular snapshotting")
     REQUIRE(read_latest_snapshot_evidence(network.tables) == snapshot_idx);
     auto snapshot_allocate_msg = read_snapshot_allocate_out(eio);
     REQUIRE(snapshot_allocate_msg.has_value());
-    auto [snapshot_idx, snapshot_size, snapshot_count] =
+    auto [allocated_snapshot_idx, snapshot_size, snapshot_count] =
       snapshot_allocate_msg.value();
+    REQUIRE(allocated_snapshot_idx == snapshot_idx);
     auto snapshot = std::vector<uint8_t>(snapshot_size);
     REQUIRE(snapshotter->write_snapshot(snapshot, snapshot_count));
   }
@@ -345,8 +348,9 @@ TEST_CASE("Rollback before snapshot is committed")
 
     auto snapshot_allocate_msg = read_snapshot_allocate_out(eio);
     REQUIRE(snapshot_allocate_msg.has_value());
-    auto [snapshot_idx, snapshot_size, snapshot_count] =
+    auto [allocated_snapshot_idx, snapshot_size, snapshot_count] =
       snapshot_allocate_msg.value();
+    REQUIRE(allocated_snapshot_idx == snapshot_idx);
     auto snapshot = std::vector<uint8_t>(snapshot_size);
     REQUIRE(snapshotter->write_snapshot(snapshot, snapshot_count));
   }
@@ -370,49 +374,52 @@ TEST_CASE("Rollback before snapshot is committed")
   INFO("Snapshot again and commit evidence");
   {
     issue_transactions(network, snapshot_tx_interval);
-    size_t snapshot_idx = network.tables->current_version();
+    size_t current_snapshot_idx = network.tables->current_version();
 
-    REQUIRE(record_signature(history, snapshotter, snapshot_idx));
-    snapshotter->commit(snapshot_idx, true);
+    REQUIRE(record_signature(history, snapshotter, current_snapshot_idx));
+    snapshotter->commit(current_snapshot_idx, true);
 
     run_one_task();
-    REQUIRE(read_latest_snapshot_evidence(network.tables) == snapshot_idx);
+    REQUIRE(
+      read_latest_snapshot_evidence(network.tables) == current_snapshot_idx);
     auto snapshot_allocate_msg = read_snapshot_allocate_out(eio);
     REQUIRE(snapshot_allocate_msg.has_value());
     auto [snapshot_idx_, snapshot_size, snapshot_count] =
       snapshot_allocate_msg.value();
-    REQUIRE(snapshot_idx == snapshot_idx_);
+    REQUIRE(current_snapshot_idx == snapshot_idx_);
     auto snapshot = std::vector<uint8_t>(snapshot_size);
     REQUIRE(snapshotter->write_snapshot(snapshot, snapshot_count));
 
     // Commit evidence
     issue_transactions(network, 1);
-    commit_idx = snapshot_idx + 2;
-    record_snapshot_evidence(snapshotter, snapshot_idx, snapshot_idx + 1);
+    commit_idx = current_snapshot_idx + 2;
+    record_snapshot_evidence(
+      snapshotter, current_snapshot_idx, current_snapshot_idx + 1);
     REQUIRE_FALSE(record_signature(history, snapshotter, commit_idx));
     snapshotter->commit(commit_idx, true);
     REQUIRE(
       read_ringbuffer_out(eio) ==
-      rb_msg({::consensus::snapshot_commit, snapshot_idx}));
+      rb_msg({::consensus::snapshot_commit, current_snapshot_idx}));
   }
 
   INFO("Force a snapshot");
   {
-    size_t snapshot_idx = network.tables->current_version();
+    size_t current_snapshot_idx = network.tables->current_version();
 
     network.tables->set_flag(
       ccf::kv::AbstractStore::StoreFlag::SNAPSHOT_AT_NEXT_SIGNATURE);
 
-    REQUIRE(record_signature(history, snapshotter, snapshot_idx));
-    snapshotter->commit(snapshot_idx, true);
+    REQUIRE(record_signature(history, snapshotter, current_snapshot_idx));
+    snapshotter->commit(current_snapshot_idx, true);
 
     run_one_task();
-    REQUIRE(read_latest_snapshot_evidence(network.tables) == snapshot_idx);
+    REQUIRE(
+      read_latest_snapshot_evidence(network.tables) == current_snapshot_idx);
     auto snapshot_allocate_msg = read_snapshot_allocate_out(eio);
     REQUIRE(snapshot_allocate_msg.has_value());
     auto [snapshot_idx_, snapshot_size, snapshot_count] =
       snapshot_allocate_msg.value();
-    REQUIRE(snapshot_idx == snapshot_idx_);
+    REQUIRE(current_snapshot_idx == snapshot_idx_);
     auto snapshot = std::vector<uint8_t>(snapshot_size);
     REQUIRE(snapshotter->write_snapshot(snapshot, snapshot_count));
 
@@ -421,13 +428,14 @@ TEST_CASE("Rollback before snapshot is committed")
 
     // Commit evidence
     issue_transactions(network, 1);
-    commit_idx = snapshot_idx + 2;
-    record_snapshot_evidence(snapshotter, snapshot_idx, snapshot_idx + 1);
+    commit_idx = current_snapshot_idx + 2;
+    record_snapshot_evidence(
+      snapshotter, current_snapshot_idx, current_snapshot_idx + 1);
     REQUIRE_FALSE(record_signature(history, snapshotter, commit_idx));
     snapshotter->commit(commit_idx, true);
     REQUIRE(
       read_ringbuffer_out(eio) ==
-      rb_msg({::consensus::snapshot_commit, snapshot_idx}));
+      rb_msg({::consensus::snapshot_commit, current_snapshot_idx}));
 
     run_one_task();
   }

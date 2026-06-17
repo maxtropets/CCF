@@ -52,21 +52,21 @@ TEST_CASE("split" * doctest::test_suite("nonstd"))
       {
         INFO("split(max_splits=3)");
         {
-          auto v = ccf::nonstd::split(s, " ", 3);
+          auto splits = ccf::nonstd::split(s, " ", 3);
           // NB: max_splits=3 => 4 returned segments
-          REQUIRE(v.size() == 4);
-          REQUIRE(v[0] == "Good");
-          REQUIRE(v[1] == "afternoon,");
-          REQUIRE(v[2] == "good");
-          REQUIRE(v[3] == "evening, and good night!");
+          REQUIRE(splits.size() == 4);
+          REQUIRE(splits[0] == "Good");
+          REQUIRE(splits[1] == "afternoon,");
+          REQUIRE(splits[2] == "good");
+          REQUIRE(splits[3] == "evening, and good night!");
         }
 
         {
-          auto v = ccf::nonstd::split(s, "afternoon", 3);
+          auto splits = ccf::nonstd::split(s, "afternoon", 3);
           // NB: max_splits=3, but only 1 split possible => 2 returned segments
-          REQUIRE(v.size() == 2);
-          REQUIRE(v[0] == "Good ");
-          REQUIRE(v[1] == ", good evening, and good night!");
+          REQUIRE(splits.size() == 2);
+          REQUIRE(splits[0] == "Good ");
+          REQUIRE(splits[1] == ", good evening, and good night!");
         }
       }
 

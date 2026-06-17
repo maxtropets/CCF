@@ -35,6 +35,7 @@ function(add_unit_test name)
   )
   enable_coverage(${name})
   target_link_libraries(${name} PRIVATE ccfcrypto -pthread)
+  add_warning_checks(${name})
   add_san(${name})
 
   add_test(NAME ${name} COMMAND ${name})

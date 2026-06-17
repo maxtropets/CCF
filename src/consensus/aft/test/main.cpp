@@ -77,9 +77,9 @@ DOCTEST_TEST_CASE("Single node commit" * doctest::test_suite("single"))
     entry->push_back(2);
     entry->push_back(3);
 
-    auto hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
+    auto consensus_hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
 
-    r0.replicate(ccf::kv::BatchVector{{i, entry, true, hooks}}, 1);
+    r0.replicate(ccf::kv::BatchVector{{i, entry, true, consensus_hooks}}, 1);
     DOCTEST_REQUIRE(r0.get_last_idx() == i);
     DOCTEST_REQUIRE(r0.get_committed_seqno() == i);
   }
@@ -430,13 +430,13 @@ DOCTEST_TEST_CASE(
   DOCTEST_INFO("Try to replicate on a follower, and fail");
   std::vector<uint8_t> entry = {1, 2, 3};
   auto data = std::make_shared<std::vector<uint8_t>>(entry);
-  auto hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
+  auto consensus_hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
   DOCTEST_REQUIRE_FALSE(
-    r1.replicate(ccf::kv::BatchVector{{1, data, true, hooks}}, 1));
+    r1.replicate(ccf::kv::BatchVector{{1, data, true, consensus_hooks}}, 1));
 
   DOCTEST_INFO("Tell the leader to replicate a message");
   DOCTEST_REQUIRE(
-    r0.replicate(ccf::kv::BatchVector{{1, data, true, hooks}}, 1));
+    r0.replicate(ccf::kv::BatchVector{{1, data, true, consensus_hooks}}, 1));
   DOCTEST_REQUIRE(r0.ledger->ledger.size() == 1);
 
   // The test ledger adds its own header. Confirm that the expected data is
@@ -551,9 +551,9 @@ DOCTEST_TEST_CASE("Multiple nodes late join" * doctest::test_suite("multiple"))
 
   std::vector<uint8_t> first_entry = {1, 2, 3};
   auto data = std::make_shared<std::vector<uint8_t>>(first_entry);
-  auto hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
+  auto consensus_hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
   DOCTEST_REQUIRE(
-    r0.replicate(ccf::kv::BatchVector{{1, data, true, hooks}}, 1));
+    r0.replicate(ccf::kv::BatchVector{{1, data, true, consensus_hooks}}, 1));
   r0.periodic(request_timeout);
 
   DOCTEST_REQUIRE(
@@ -625,7 +625,7 @@ DOCTEST_TEST_CASE("Recv append entries logic" * doctest::test_suite("multiple"))
     std::make_shared<aft::ChannelStubProxy>(),
     std::make_shared<aft::State>(node_id1),
     nullptr);
-  auto hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
+  auto consensus_hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
 
   aft::Configuration::Nodes config0;
   config0[node_id0] = {};
@@ -932,36 +932,37 @@ DOCTEST_TEST_CASE("Exceed append entries limit")
   auto data = std::make_shared<std::vector<uint8_t>>(
     (r0.append_entries_size_limit / 2), 1);
   // I want to get ~500 messages sent over 1mill entries
-  auto individual_entries = 1'000'000;
-  auto num_small_entries_sent = 500;
-  auto num_big_entries = 4;
+  size_t individual_entries = 1'000'000;
+  size_t num_small_entries_sent = 500;
+  size_t num_big_entries = 4;
 
   // send_append_entries() triggered or not
   bool expected_ae = false;
 
   for (size_t i = 1; i <= num_big_entries; ++i)
   {
-    auto hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
+    auto consensus_hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
     DOCTEST_REQUIRE(
-      r0.replicate(ccf::kv::BatchVector{{i, data, true, hooks}}, 1));
+      r0.replicate(ccf::kv::BatchVector{{i, data, true, consensus_hooks}}, 1));
     const auto received_ae =
       dispatch_all_and_DOCTEST_CHECK<aft::AppendEntries>(
-        nodes, node_id0, r0c->messages, [&i](const auto& msg) {
+        nodes, node_id0, r0c->messages, [](const auto& msg) {
           DOCTEST_REQUIRE(msg.term == 1);
         }) > 0;
     DOCTEST_REQUIRE(received_ae == expected_ae);
     expected_ae = !expected_ae;
   }
 
-  int data_size = (num_small_entries_sent * r0.append_entries_size_limit) /
+  size_t data_size = (num_small_entries_sent * r0.append_entries_size_limit) /
     (individual_entries - num_big_entries);
   auto smaller_data = std::make_shared<std::vector<uint8_t>>(data_size, 1);
 
   for (size_t i = num_big_entries + 1; i <= individual_entries; ++i)
   {
-    auto hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
+    auto consensus_hooks = std::make_shared<ccf::kv::ConsensusHookPtrs>();
     DOCTEST_REQUIRE(
-      r0.replicate(ccf::kv::BatchVector{{i, smaller_data, true, hooks}}, 1));
+      r0.replicate(
+        ccf::kv::BatchVector{{i, smaller_data, true, consensus_hooks}}, 1));
     dispatch_all(nodes, node_id0, r0c->messages);
   }
 

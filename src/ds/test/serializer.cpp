@@ -81,7 +81,6 @@ struct VectorWriter : public AbstractWriter
 };
 
 auto is_empty = [](const std::vector<uint8_t>& v) { return v.empty(); };
-auto is_not_empty = [](const std::vector<uint8_t>& v) { return !v.empty(); };
 
 // A section-serializer that converts all arguments into strings
 struct StringifiedSection : public AbstractSerializedSection
@@ -234,16 +233,17 @@ TEST_CASE("Deserialize" * doctest::test_suite("serializer"))
 
     {
       auto d = data;
-      auto s = size;
+      auto remaining_size = size;
 
-      auto deser = PS::deserialize(data, size);
+      auto deser = PS::deserialize(d, remaining_size);
       static_assert(std::tuple_size_v<decltype(deser)> == 3);
 
       REQUIRE(std::get<0>(deser) == buffer[0]);
       REQUIRE(std::get<1>(deser) == buffer[1]);
       REQUIRE(std::get<2>(deser) == (buffer[2] | (size_t)buffer[3] << 8));
 
-      auto deser2 = PS::deserialize<uint8_t, uint8_t, uint16_t>(d, s);
+      auto deser2 =
+        PS::deserialize<uint8_t, uint8_t, uint16_t>(d, remaining_size);
       REQUIRE(deser == deser2);
     }
   }
@@ -337,11 +337,12 @@ TEST_CASE("roundtrip" * doctest::test_suite("serializer"))
 
     const ByteRange br{raw, size};
 
-    VectorWriter w;
+    VectorWriter byte_range_writer;
 
-    w.write_with<TS>(any_message, br);
+    byte_range_writer.write_with<TS>(any_message, br);
 
-    auto [vec_] = TS::deserialize(w.payload.data(), w.payload.size());
+    auto [vec_] = TS::deserialize(
+      byte_range_writer.payload.data(), byte_range_writer.payload.size());
     static_assert(std::is_same_v<decltype(vec_), TV>);
 
     auto& vec = vec_;

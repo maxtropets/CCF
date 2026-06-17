@@ -197,12 +197,12 @@ DOCTEST_TEST_CASE("Concurrent kv access" * doctest::test_suite("concurrency"))
     const auto initial_version = kv_store.compacted_version();
 
     // Start tx threads
-    for (size_t i = 0u; i < thread_count; ++i)
+    for (size_t thread_idx = 0u; thread_idx < thread_count; ++thread_idx)
     {
-      args[i].kv_store = &kv_store;
-      args[i].counter = &active_tx_threads;
+      args[thread_idx].kv_store = &kv_store;
+      args[thread_idx].counter = &active_tx_threads;
 
-      tx_threads[i] = std::thread(thread_fn, &args[i]);
+      tx_threads[thread_idx] = std::thread(thread_fn, &args[thread_idx]);
     }
 
     // Wait for the compact thread to start
@@ -235,9 +235,9 @@ DOCTEST_TEST_CASE("Concurrent kv access" * doctest::test_suite("concurrency"))
     DOCTEST_REQUIRE(consensus->number_of_replicas() == expected);
 
     // Wait for tx threads to complete
-    for (size_t i = 0u; i < thread_count; ++i)
+    for (size_t thread_idx = 0u; thread_idx < thread_count; ++thread_idx)
     {
-      tx_threads[i].join();
+      tx_threads[thread_idx].join();
     }
 
     // Wait for compact thread to complete

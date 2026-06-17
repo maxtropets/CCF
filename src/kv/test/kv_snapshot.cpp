@@ -260,18 +260,18 @@ TEST_CASE(
   auto encryptor = std::make_shared<ccf::kv::NullTxEncryptor>();
   store.set_encryptor(encryptor);
 
-  MapTypes::StringString string_map("public:string_map");
+  MapTypes::StringString local_string_map("public:string_map");
 
   ccf::kv::Version snapshot_version = ccf::kv::NoVersion;
   INFO("Apply transactions to original store");
   {
     auto tx1 = store.create_tx();
-    auto handle_1 = tx1.rw<MapTypes::StringString>("public:string_map");
+    auto handle_1 = tx1.rw(local_string_map);
     handle_1->put("foo", "foo");
     REQUIRE(tx1.commit() == ccf::kv::CommitResult::SUCCESS); // Committed at 1
 
     auto tx2 = store.create_tx();
-    auto handle_2 = tx2.rw<MapTypes::StringString>("public:string_map");
+    auto handle_2 = tx2.rw(local_string_map);
     handle_2->put("bar", "bar");
     REQUIRE(tx2.commit() == ccf::kv::CommitResult::SUCCESS); // Committed at 2
     snapshot_version = tx2.commit_version();
@@ -290,7 +290,7 @@ TEST_CASE(
     new_store.set_encryptor(encryptor);
 
     auto tx = new_store.create_tx();
-    auto handle = tx.rw<MapTypes::StringString>("public:string_map");
+    auto handle = tx.rw(local_string_map);
     handle->put("in", "flight");
     // tx is not committed until the snapshot is deserialised
 
@@ -304,7 +304,7 @@ TEST_CASE(
 
     // Try again
     auto tx2 = new_store.create_tx();
-    auto handle2 = tx2.rw<MapTypes::StringString>("public:string_map");
+    auto handle2 = tx2.rw(local_string_map);
     handle2->put("baz", "baz");
     REQUIRE(tx2.commit() == ccf::kv::CommitResult::SUCCESS);
   }
@@ -316,7 +316,7 @@ TEST_CASE("Commit hooks with snapshot" * doctest::test_suite("snapshot"))
   auto encryptor = std::make_shared<ccf::kv::NullTxEncryptor>();
   store.set_encryptor(encryptor);
 
-  constexpr auto string_map = "public:string_map";
+  constexpr auto string_map_name = "public:string_map";
   constexpr auto string_value = "public:string_value";
   constexpr auto string_set = "public:string_set";
 
@@ -361,7 +361,7 @@ TEST_CASE("Commit hooks with snapshot" * doctest::test_suite("snapshot"))
   {
     {
       auto tx = store.create_tx();
-      auto map_handle = tx.rw<MapTypes::StringString>(string_map);
+      auto map_handle = tx.rw<MapTypes::StringString>(string_map_name);
       map_handle->put("foo", "foo");
       map_handle->put("bar", "bar");
       auto value_handle = tx.rw<MapTypes::StringValue>(string_value);
@@ -375,7 +375,7 @@ TEST_CASE("Commit hooks with snapshot" * doctest::test_suite("snapshot"))
     {
       // New transaction, deleting some content from the previous transaction
       auto tx = store.create_tx();
-      auto map_handle = tx.rw<MapTypes::StringString>(string_map);
+      auto map_handle = tx.rw<MapTypes::StringString>(string_map_name);
       map_handle->put("baz", "baz");
       map_handle->remove("bar");
       auto value_handle = tx.rw<MapTypes::StringValue>(string_value);
@@ -398,15 +398,16 @@ TEST_CASE("Commit hooks with snapshot" * doctest::test_suite("snapshot"))
   ccf::kv::Store new_store;
   new_store.set_encryptor(encryptor);
 
-  MapTypes::StringString new_string_map(string_map);
+  MapTypes::StringString new_string_map(string_map_name);
   MapTypes::StringValue new_string_value(string_value);
   MapTypes::StringSet new_string_set(string_set);
 
   INFO("Set hooks on target store");
   {
-    new_store.set_map_hook(string_map, new_string_map.wrap_map_hook(map_hook));
+    new_store.set_map_hook(
+      string_map_name, new_string_map.wrap_map_hook(map_hook));
     new_store.set_global_hook(
-      string_map, new_string_map.wrap_commit_hook(global_map_hook));
+      string_map_name, new_string_map.wrap_commit_hook(global_map_hook));
     new_store.set_map_hook(
       string_value, new_string_value.wrap_map_hook(value_hook));
     new_store.set_global_hook(
@@ -428,7 +429,7 @@ TEST_CASE("Commit hooks with snapshot" * doctest::test_suite("snapshot"))
     INFO("Verify content of snapshot");
     {
       auto tx = new_store.create_tx();
-      auto map_handle = tx.ro<MapTypes::StringString>(string_map);
+      auto map_handle = tx.ro<MapTypes::StringString>(string_map_name);
       REQUIRE(map_handle->get("foo").has_value());
       REQUIRE(!map_handle->get("bar").has_value());
       REQUIRE(map_handle->get("baz").has_value());
@@ -513,7 +514,7 @@ TEST_CASE("Commit hooks with snapshot" * doctest::test_suite("snapshot"))
     "Remove all elements in source store and deserialise resulting snapshot");
   {
     auto tx = store.create_tx();
-    auto map_handle = tx.rw<MapTypes::StringString>(string_map);
+    auto map_handle = tx.rw<MapTypes::StringString>(string_map_name);
     map_handle->clear();
     auto value_handle = tx.rw<MapTypes::StringValue>(string_value);
     value_handle->clear();
@@ -533,17 +534,19 @@ TEST_CASE("Commit hooks with snapshot" * doctest::test_suite("snapshot"))
 
     INFO("Verify content of snapshot");
     {
-      auto tx = new_store.create_tx();
-      auto map_handle = tx.ro<MapTypes::StringString>(string_map);
-      REQUIRE(!map_handle->get("foo").has_value());
-      REQUIRE(!map_handle->get("bar").has_value());
-      REQUIRE(!map_handle->get("baz").has_value());
-      auto value_handle = tx.ro<MapTypes::StringValue>(string_value);
-      REQUIRE(!value_handle->get().has_value());
-      auto set_handle = tx.rw<MapTypes::StringSet>(string_set);
-      REQUIRE(!set_handle->contains("foo"));
-      REQUIRE(!set_handle->contains("bar"));
-      REQUIRE(!set_handle->contains("baz"));
+      auto verify_tx = new_store.create_tx();
+      auto verify_map_handle =
+        verify_tx.ro<MapTypes::StringString>(string_map_name);
+      REQUIRE(!verify_map_handle->get("foo").has_value());
+      REQUIRE(!verify_map_handle->get("bar").has_value());
+      REQUIRE(!verify_map_handle->get("baz").has_value());
+      auto verify_value_handle =
+        verify_tx.ro<MapTypes::StringValue>(string_value);
+      REQUIRE(!verify_value_handle->get().has_value());
+      auto verify_set_handle = verify_tx.rw<MapTypes::StringSet>(string_set);
+      REQUIRE(!verify_set_handle->contains("foo"));
+      REQUIRE(!verify_set_handle->contains("bar"));
+      REQUIRE(!verify_set_handle->contains("baz"));
     }
 
     INFO("Verify local hook execution");

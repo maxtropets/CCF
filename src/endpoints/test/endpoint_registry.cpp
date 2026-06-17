@@ -73,11 +73,11 @@ TEST_CASE("URL template parsing")
     require_parsed_components(prefix + "/{name}", {"name"});
     require_parsed_components(prefix + "/{name}/world", {"name"});
 
-    auto parsed =
+    auto parsed_template =
       require_parsed_components(prefix + "/{name}/{place}", {"name", "place"});
 
     path = prefix + "/alice/spain";
-    REQUIRE(std::regex_match(path, match, parsed->template_regex));
+    REQUIRE(std::regex_match(path, match, parsed_template->template_regex));
     REQUIRE(match[1].str() == "alice");
     REQUIRE(match[2].str() == "spain");
 

@@ -12,6 +12,7 @@
 #include <queue>
 #include <string>
 #include <thread>
+#include <utility>
 
 struct ClientParams
 {
@@ -101,7 +102,7 @@ struct Client : public LoopingThread<ClientState>
       // determined, estimating how far 'behind' we are (and thus how likely we
       // should be to skip verification) by the length of pending messages.
       const auto n = rand() % 100;
-      if (n >= state.pending_actions.size() || n == 0)
+      if (std::cmp_greater_equal(n, state.pending_actions.size()) || n == 0)
       {
         // Verify (check that the first response matches the first pending
         // action)

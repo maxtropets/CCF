@@ -23,14 +23,12 @@ void require_throws_with(
   const std::vector<std::string>& includes,
   const std::vector<std::string>& excludes = {})
 {
-  bool threw = false;
   try
   {
     f();
   }
   catch (const Ex& ex)
   {
-    threw = true;
     const std::string what = ex.what();
 
     for (const auto& s : includes)
@@ -64,8 +62,6 @@ TEST_CASE("Dispatch" * doctest::test_suite("messaging"))
   auto set_arg = [&x](const uint8_t* data, size_t size) {
     x = serialized::read<size_t>(data, size);
   };
-
-  auto unregister = [](const uint8_t*, size_t) { return false; };
 
   Dispatcher<MType> d("Test");
 
@@ -594,14 +590,11 @@ TEST_CASE("Deadlock" * doctest::test_suite("messaging"))
 
   // To read all these pending messages, the pending queue must be flushed
   // multiple times
-  size_t total_read = 0;
   while (true)
   {
     const size_t n_read =
       processor_inside.read_all(circuit.read_from_outside());
     REQUIRE(n_read > 0);
-    total_read += n_read;
-
     if (!non_blocking_writer->try_flush_pending())
     {
       break;

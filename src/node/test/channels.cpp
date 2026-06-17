@@ -132,7 +132,7 @@ struct NodeOutboundMsg
     auto r = data();
     static_assert(sizeof(ChannelMsg) == 8);
     size_t hdr_size = sizeof(ChannelMsg);
-    ChannelMsg channel_msg_type =
+    [[maybe_unused]] ChannelMsg channel_msg_type =
       serialized::read<ChannelMsg>(r.data(), hdr_size);
     auto data = std::vector<uint8_t>(r.begin() + sizeof(ChannelMsg), r.end());
     return data;
@@ -219,8 +219,6 @@ NodeOutboundMsg<MsgType> get_first(
   auto outbound_msgs = read_outbound_msgs<MsgType>(circuit);
   REQUIRE(outbound_msgs.size() >= 1);
   auto msg = outbound_msgs[0];
-  const auto* data_ = msg.payload.data();
-  auto size_ = msg.payload.size();
   REQUIRE(msg.type == msg_type);
   return msg;
 }
@@ -823,7 +821,9 @@ TEST_CASE_FIXTURE(IORingbuffersFixture, "Full NodeToNode test")
       size_t desired_rollovers = 5;
       size_t actual_rollovers = 0;
 
-      for (size_t i = 0; i < message_limit * desired_rollovers; i++)
+      for (size_t message_idx = 0;
+           message_idx < message_limit * desired_rollovers;
+           message_idx++)
       {
         if (rand() % 2 == 0)
         {
@@ -839,17 +839,17 @@ TEST_CASE_FIXTURE(IORingbuffersFixture, "Full NodeToNode test")
         auto msgs = get_all_msgs({&eio1, &eio2});
         do
         {
-          for (auto msg : msgs)
+          for (auto outbound_msg : msgs)
           {
-            auto& n2n = (msg.from == ni2) ? n2n1 : n2n2;
+            auto& n2n = (outbound_msg.from == ni2) ? n2n1 : n2n2;
 
-            switch (msg.type)
+            switch (outbound_msg.type)
             {
               case NodeMsgType::channel_msg:
               {
-                n2n.recv_channel_message(msg.from, msg.data());
+                n2n.recv_channel_message(outbound_msg.from, outbound_msg.data());
 
-                auto d = msg.data();
+                auto d = outbound_msg.data();
                 const uint8_t* data = d.data();
                 size_t sz = d.size();
                 auto type = serialized::read<ChannelMsg>(data, sz);
@@ -859,14 +859,15 @@ TEST_CASE_FIXTURE(IORingbuffersFixture, "Full NodeToNode test")
               }
               case NodeMsgType::consensus_msg:
               {
-                auto hdr = msg.authenticated_hdr;
-                const auto* data = msg.payload.data();
-                auto size = msg.payload.size();
+                auto hdr = outbound_msg.authenticated_hdr;
+                const auto* data = outbound_msg.payload.data();
+                auto size = outbound_msg.payload.size();
 
                 REQUIRE(n2n.recv_authenticated(
-                  msg.from, {hdr.data(), hdr.size()}, data, size));
+                  outbound_msg.from, {hdr.data(), hdr.size()}, data, size));
                 break;
               }
+              case NodeMsgType::forwarded_msg:
               default:
                 REQUIRE(false);
             }
@@ -1634,7 +1635,7 @@ TEST_CASE_FIXTURE(IORingbuffersFixture, "Key rotation")
   // Run a few more iterations manually interleaved, simulating a synchronous
   // period, to reach quiescence
   static constexpr size_t worst_case = 2 * messages_each;
-  for (auto i = 0; i < worst_case; ++i)
+  for (size_t i = 0; i < worst_case; ++i)
   {
     LOG_INFO_FMT("Catchup loop #{}/{}", i, worst_case);
     tc1.process(finished_reading, true);
@@ -1741,25 +1742,26 @@ TEST_CASE_FIXTURE(IORingbuffersFixture, "Timeout idle channels")
       nid2, NodeMsgType::consensus_msg, msg.begin(), msg.size()));
 
     auto msgs = read_outbound_msgs<MsgType>(eio1);
-    for (const auto& msg : msgs)
+    for (const auto& outbound_msg : msgs)
     {
-      switch (msg.type)
+      switch (outbound_msg.type)
       {
         case NodeMsgType::channel_msg:
         {
-          channels2.recv_channel_message(msg.from, msg.data());
+          channels2.recv_channel_message(outbound_msg.from, outbound_msg.data());
           break;
         }
         case NodeMsgType::consensus_msg:
         {
-          auto hdr = msg.authenticated_hdr;
-          const auto* data = msg.payload.data();
-          auto size = msg.payload.size();
+          auto hdr = outbound_msg.authenticated_hdr;
+          const auto* data = outbound_msg.payload.data();
+          auto size = outbound_msg.payload.size();
 
           REQUIRE(channels2.recv_authenticated(
-            msg.from, {hdr.data(), hdr.size()}, data, size));
+            outbound_msg.from, {hdr.data(), hdr.size()}, data, size));
           break;
         }
+        case NodeMsgType::forwarded_msg:
         default:
         {
           REQUIRE(false);
@@ -1777,15 +1779,18 @@ TEST_CASE_FIXTURE(IORingbuffersFixture, "Timeout idle channels")
       }
       else
       {
-        for (const auto& msg : msgs)
+        for (const auto& outbound_msg : msgs)
         {
-          switch (msg.type)
+          switch (outbound_msg.type)
           {
             case NodeMsgType::channel_msg:
             {
-              channels1.recv_channel_message(msg.from, msg.data());
+              channels1.recv_channel_message(
+                outbound_msg.from, outbound_msg.data());
               break;
             }
+            case NodeMsgType::consensus_msg:
+            case NodeMsgType::forwarded_msg:
             default:
             {
               REQUIRE(false);
