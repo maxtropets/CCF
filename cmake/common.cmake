@@ -87,6 +87,7 @@ function(add_test_bin name)
   )
   enable_coverage(${name})
   target_link_libraries(${name} PRIVATE ccfcrypto)
+  add_warning_checks(${name})
   add_san(${name})
 endfunction()
 
@@ -267,6 +268,7 @@ function(add_picobench name)
   )
 
   add_san(${name})
+  add_warning_checks(${name})
 
   # -Wall -Werror catches a number of warnings in picobench
   target_include_directories(${name} SYSTEM PRIVATE 3rdparty/test)
