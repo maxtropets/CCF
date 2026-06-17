@@ -58,6 +58,7 @@ function(add_fuzz_test name)
   target_link_options(${name} PRIVATE -fsanitize=fuzzer)
   target_include_directories(${name} PRIVATE src ${CCFCRYPTO_INC})
   target_link_libraries(${name} PRIVATE -pthread)
+  add_warning_checks(${name})
   add_san(${name})
   # UBSan's vptr check fires inside libstdc++'s
   # std::_Sp_counted_ptr_inplace<T,A,_Lp>::_Sp_counted_ptr_inplace ctor
@@ -267,6 +268,7 @@ function(add_picobench name)
   )
 
   add_san(${name})
+  add_warning_checks(${name})
 
   # -Wall -Werror catches a number of warnings in picobench
   target_include_directories(${name} SYSTEM PRIVATE 3rdparty/test)
