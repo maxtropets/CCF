@@ -18,8 +18,7 @@ Identity references use `identity_type`, not type-agnostic ids.
 
 - `identity_type` is a CCF-specific enum, not the concrete crypto type.
 - If needed, two enum values may still point to identities with the same crypto shape.
-- Upgrade is per type and code-embedded, like COSE ledger signing mode.
-- It is not a runtime config knob.
+- Upgrade is done via each node configuration and supporting join policies.
 
 Previous identity endorsement is per type, so it is clear who endorses whom:
 
@@ -69,17 +68,15 @@ Current node identity state is split across node tables:
 
 - Current `NodeInfo` already stores the node's quote, encryption public key, status, CSR, and public key.
 - The `node_id` is derived from the node public key.
-
-- The N2N migration should be orthogonal: eventually replace the custom N2N channel with a PQ-safe transport, likely TLS.
+- The N2N migration should be orthogonal: eventually replace the custom N2N channel with a PQ-safe transport via QUIC.
 - The internal node communication identity shape is left opaque for now.
-
-- During a rolling N2N upgrade, new nodes join with the communication identity required by their binary and old nodes retire.
+- During a rolling N2N upgrade, new nodes join with the communication identity required by their config and old nodes retire.
 - Since this is internal node communication, there is no need to offer several N2N identities in parallel.
 
 ## Introducing and removing identities
 
 - Identity material and purpose bindings are introduced or removed atomically.
-- Nodes advertise the service identity types they support when they join.
+- Nodes advertise the service identity types they support when they join, or set them straight avay in the KV on service creation/recovery.
 - Join policy is also expressed in terms of service identity types, with the same two-step shape as the COSE-only ledger upgrade:
 
 | Stage | Join policy | Effect |
@@ -90,7 +87,7 @@ Current node identity state is split across node tables:
 - If a joining node advertises an allowed identity type and the service does not have that identity yet, the identity must be created in the same join transaction.
 - The identity is then reused for future joiners of the same type, and its private material is shared with trusted nodes the same way service private material is shared today.
 - Recovery follows the same rule.
-- The first recovery node sets the initial join policy from the identity types embedded in its binary.
+- The first recovery node sets the initial join policy from the identity types in its config.
 
 ## Previous identity endorsements
 
