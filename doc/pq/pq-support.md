@@ -214,14 +214,52 @@ Registering a new PQ-enabled cert creates a new user/member identity, same as an
 The standards RFCs/drafts possibly targeted by this design are:
 
 * [`draft-ietf-lamps-pq-composite-sigs`](https://datatracker.ietf.org/doc/draft-ietf-lamps-pq-composite-sigs/) for Composite-ML-DSA X.509 certificates
+* [`draft-reddy-tls-composite-mldsa`](https://datatracker.ietf.org/doc/draft-reddy-tls-composite-mldsa/) for Composite-ML-DSA authentication in TLS 1.3.
 * [`draft-ietf-jose-pq-composite-sigs`](https://datatracker.ietf.org/doc/draft-ietf-jose-pq-composite-sigs/) for JOSE/COSE composite signatures.
 * [`RFC 9881`](https://datatracker.ietf.org/doc/rfc9881/) for pure ML-DSA X.509 certificates.
 * [`RFC 9964`](https://datatracker.ietf.org/doc/rfc9964/) for pure ML-DSA JOSE/COSE signatures.
 * [`FIPS 204`](https://csrc.nist.gov/pubs/fips/204/final) for the ML-DSA algorithm itself.
 * [OpenSSL 3.5 ML-DSA key support](https://docs.openssl.org/3.5/man7/EVP_PKEY-ML-DSA/) and [OpenSSL 3.5 ML-DSA signature support](https://docs.openssl.org/3.5/man7/EVP_SIGNATURE-ML-DSA/) for implementation details.
 
-CCF will target Azure Linux 4 and OpenSSL 3.5, so here is the list of what is currently supported or planned to be supported:
+CCF will target Azure Linux 4 and OpenSSL 3.5, so here is the list of what is currently supported and not supported:
 
 - OpenSSL 3.5 supports ML-DSA keys and signatures.
 - OpenSSL 3.5 supports ML-KEM, SLH-DSA, and TLS hybrid KEX.
-- OpenSSL 3.5 does not stock-support LAMPS Composite-ML-DSA certificates in TLS.
+- OpenSSL 3.5 *does not* support LAMPS Composite-ML-DSA certificates or Composite-ML-DSA authentication in TLS.
+
+### Azure Linux 4 confirmation
+
+This was confirmed on Azure Linux 4 with OpenSSL 3.5, without SymCrypt yet.
+
+Confirmed support:
+
+- Pure `ML-DSA-65` X.509 certificates can be generated, DER-parsed, and verified with `X509_verify`.
+- `ML-DSA-65` and `SLH-DSA-SHA2-128s` signatures can be generated and verified.
+- `ML-KEM-512`, `ML-KEM-768`, and `ML-KEM-1024` encapsulation and decapsulation work.
+- TLS 1.3 can negotiate the `X25519MLKEM768` hybrid group with an `ML-DSA-65` server certificate, `mldsa65` CertificateVerify, and client certificate verification.
+- Composite ML-DSA X.509/TLS is not supported by this stock OpenSSL build. No provider composite algorithms are exposed, composite keymgmt/signature candidates cannot be fetched, and TLS rejects composite signature algorithm names. Without an `EVP_PKEY` keymgmt and signature provider implementation, X.509 and TLS have no composite primitive to use.
+
+Composite certificates can be encoded, but stock OpenSSL 3.5 cannot use them as normal certificates.
+OpenSSL has no Composite-ML-DSA key, signature, X.509, or TLS `SignatureScheme` support.
+CCF therefore cannot ask OpenSSL to generate, verify, select, or present a Composite-ML-DSA certificate in TLS.
+
+Composite COSE signatures are technically possible with stock OpenSSL 3.5, but not as one OpenSSL algorithm.
+The JOSE/COSE draft reuses the LAMPS composite key and signature encoding, carried as AKP `pub`/`priv` bytes.
+CCF can implement the draft combiner and use OpenSSL only for the ML-DSA and classical component signatures.
+This is draft-compliant if CCF pins the draft version, labels, prehash, key encodings, and COSE algorithm values.
+
+The component keys must still be a single composite key.
+The drafts require fresh component key generation and forbid reusing those keys in other contexts or as standalone keys.
+For certificate-backed identities, `x5chain`/`x5c` should refer to a LAMPS composite X.509 certificate.
+Stock OpenSSL cannot create that certificate form, so this needs custom tooling or another provider/library.
+It is not RFC-standard yet: RFC 9964 only standardizes pure ML-DSA for JOSE/COSE.
+
+### Path forward
+
+Start with a PQ-only extra identity for RFC 9964 ML-DSA COSE signing.
+Keep the existing classical identity and signature during migration.
+For TLS confidentiality, enable OpenSSL 3.5 ML-KEM hybrid groups, starting with `X25519MLKEM768`.
+
+Leave composite support for later.
+Composite TLS depends on composite certificate and TLS signature support that stock OpenSSL does not provide.
+For signing, require two COSE signatures for now: one classical and one ML-DSA.
