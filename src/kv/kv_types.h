@@ -18,8 +18,8 @@
 #include "ccf/service/reconfiguration_type.h"
 #include "ccf/tx_id.h"
 #include "ccf/tx_status.h"
-#include "crypto/openssl/ec_key_pair.h"
 #include "kv/ledger_chunker_interface.h"
+#include "node/identity.h"
 #include "serialised_entry_format.h"
 
 #include <array>
@@ -413,8 +413,8 @@ namespace ccf::kv
     virtual std::vector<uint8_t> serialise_tree(size_t to) = 0;
     virtual void set_endorsed_certificate(const ccf::crypto::Pem& cert) = 0;
     virtual void start_signature_emit_timer() = 0;
-    virtual void set_service_signing_identity(
-      std::shared_ptr<ccf::crypto::ECKeyPair_OpenSSL> keypair,
+    virtual void set_service_signing_identities(
+      const ccf::SigningIdentityMap& identities,
       const COSESignaturesConfig& cose_signatures) = 0;
     virtual const ccf::COSESignaturesConfig& get_cose_signatures_config() = 0;
   };

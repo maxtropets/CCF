@@ -3,7 +3,9 @@
 
 #include "crypto/openssl/ec_key_pair.h"
 
+#include "ccf/crypto/base64.h"
 #include "ccf/crypto/curve.h"
+#include "ccf/crypto/hkdf.h"
 #include "ccf/crypto/openssl/openssl_wrappers.h"
 #include "crypto/openssl/ec_public_key.h"
 #include "crypto/openssl/hash.h"
@@ -543,6 +545,73 @@ namespace ccf::crypto
 
   ECKeyPairPtr make_ec_key_pair(const JsonWebKeyECPrivate& jwk)
   {
+    return std::make_shared<ECKeyPair_OpenSSL>(jwk);
+  }
+
+  std::shared_ptr<ECKeyPair_OpenSSL> derive_ec_key_pair(
+    CurveID curve_id, std::span<const uint8_t> ikm, const std::string& label)
+  {
+    using namespace OpenSSL;
+
+    Unique_EC_GROUP group(ECPublicKey_OpenSSL::get_openssl_group_id(curve_id));
+    const BIGNUM* order = EC_GROUP_get0_order(group);
+    if (order == nullptr)
+    {
+      throw std::logic_error("Failed to read the EC group order");
+    }
+    const auto coordinate_size = static_cast<size_t>(BN_num_bytes(order));
+
+    Unique_BN_CTX bn_ctx;
+    Unique_BIGNUM d;
+
+    // Derive more material than the order so that reducing it introduces
+    // negligible bias, and re-derive in the vanishingly unlikely case the
+    // scalar reduces to zero.
+    static constexpr size_t bias_margin = 16;
+    static constexpr uint8_t max_attempts = 255;
+    uint8_t attempt = 0;
+    while (true)
+    {
+      std::vector<uint8_t> info(label.begin(), label.end());
+      info.push_back(attempt);
+      const auto material = ccf::crypto::hkdf(
+        MDType::SHA384, coordinate_size + bias_margin, ikm, {}, info);
+
+      CHECKNULL(BN_bin2bn(material.data(), material.size(), d));
+      CHECK1(BN_mod(d, d, order, bn_ctx));
+      if (BN_is_zero(d) == 0)
+      {
+        break;
+      }
+
+      if (attempt == max_attempts)
+      {
+        throw std::logic_error("Failed to derive an EC scalar from seed");
+      }
+      ++attempt;
+    }
+
+    Unique_EC_POINT public_point(group);
+    CHECK1(EC_POINT_mul(group, public_point, d, nullptr, nullptr, bn_ctx));
+
+    Unique_BIGNUM x;
+    Unique_BIGNUM y;
+    CHECK1(EC_POINT_get_affine_coordinates(group, public_point, x, y, bn_ctx));
+
+    std::vector<uint8_t> x_raw(coordinate_size);
+    std::vector<uint8_t> y_raw(coordinate_size);
+    std::vector<uint8_t> d_raw(coordinate_size);
+    CHECKPOSITIVE(BN_bn2binpad(x, x_raw.data(), x_raw.size()));
+    CHECKPOSITIVE(BN_bn2binpad(y, y_raw.data(), y_raw.size()));
+    CHECKPOSITIVE(BN_bn2binpad(d, d_raw.data(), d_raw.size()));
+
+    JsonWebKeyECPrivate jwk;
+    jwk.kty = JsonWebKeyType::EC;
+    jwk.crv = curve_id_to_jwk_curve(curve_id);
+    jwk.x = b64url_from_raw(x_raw, false);
+    jwk.y = b64url_from_raw(y_raw, false);
+    jwk.d = b64url_from_raw(d_raw, false);
+
     return std::make_shared<ECKeyPair_OpenSSL>(jwk);
   }
 }

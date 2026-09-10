@@ -11,6 +11,10 @@ namespace ccf
   struct NetworkState : public NetworkTables
   {
     std::unique_ptr<NetworkIdentity> identity;
+    // Seed the non-legacy signing identities are derived from. Every node of
+    // an epoch holds it, so any of them can derive and serve any identity.
+    SigningSeed signing_seed;
+    SigningIdentityMap signing_identities;
     std::shared_ptr<LedgerSecrets> ledger_secrets;
 
     NetworkState() = default;

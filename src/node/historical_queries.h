@@ -14,6 +14,7 @@
 #include "node/rpc/node_interface.h"
 #include "node/tx_receipt_impl.h"
 #include "service/tables/node_signature.h"
+#include "service/tables/signatures.h"
 
 #include <list>
 #include <map>

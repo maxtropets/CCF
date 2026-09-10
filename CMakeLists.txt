@@ -1311,6 +1311,24 @@ if(BUILD_TESTS)
     ADDITIONAL_ARGS --js-app-bundle ${CMAKE_SOURCE_DIR}/samples/apps/logging/js
   )
 
+  add_e2e_test(
+    NAME signing_identities
+    PYTHON_SCRIPT ${CMAKE_SOURCE_DIR}/tests/signing_identities.py
+    BUCKET bucket_c
+    ADDITIONAL_ARGS
+      --constitution
+      ${CMAKE_SOURCE_DIR}/samples/constitutions/virtual/virtual_attestation_actions.js
+  )
+
+  add_e2e_test(
+    NAME signing_endorsements
+    PYTHON_SCRIPT ${CMAKE_SOURCE_DIR}/tests/signing_endorsements.py
+    BUCKET bucket_c
+    ADDITIONAL_ARGS
+      --constitution
+      ${CMAKE_SOURCE_DIR}/samples/constitutions/virtual/virtual_attestation_actions.js
+  )
+
   set(
     RBAC_CONSTITUTION_ARGS
     --constitution

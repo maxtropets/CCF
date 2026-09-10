@@ -78,9 +78,17 @@ namespace ccf
         {
           continue;
         }
+        // Each signing identity has its own chain. The recovery snapshot
+        // chain is anchored to the previous service certificate, so only the
+        // CLASSICAL chain is collected here.
         if (
-          result.endorsement.has_value() ||
-          key != ccf::PreviousServiceIdentityEndorsement::create_unit())
+          key !=
+          ccf::kv::serialisers::BlitSerialiser<
+            ccf::IdentityType>::to_serialised(ccf::IdentityType::CLASSICAL))
+        {
+          continue;
+        }
+        if (result.endorsement.has_value())
         {
           throw std::logic_error(
             "Invalid previous service identity endorsement table write");

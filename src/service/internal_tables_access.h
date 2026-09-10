@@ -23,6 +23,7 @@
 #include "service/tables/governance_history.h"
 #include "service/tables/local_sealing.h"
 #include "service/tables/previous_service_identity.h"
+#include "service/tables/signing_identities.h"
 
 #include <algorithm>
 #include <ostream>
@@ -506,7 +507,8 @@ namespace ccf
       const ccf::crypto::Pem& service_cert,
       ccf::TxID create_txid,
       nlohmann::json service_data = nullptr,
-      bool recovering = false)
+      bool recovering = false,
+      const Identities& signing_identities = {})
     {
       auto* service = tx.rw<ccf::Service>(Tables::SERVICE);
 
@@ -558,6 +560,40 @@ namespace ccf
         recovery_count = prev_service_info->recovery_count.value_or(0) + 1;
       }
 
+      const auto service_cert_der = ccf::crypto::cert_pem_to_der(service_cert);
+      auto* signing_identity_table =
+        tx.rw<SigningIdentities>(Tables::SIGNING_IDENTITIES);
+
+      // Identities are never dropped. Each one has its own endorsement chain,
+      // and a chain which stops cannot be resumed: a later epoch would claim
+      // its predecessor was live throughout the gap, when it was not.
+      signing_identity_table->foreach(
+        [&signing_identities](
+          const auto& identity_type, const auto& /*identity*/) {
+          if (
+            identity_type != IdentityType::CLASSICAL &&
+            !signing_identities.contains(identity_type))
+          {
+            throw std::logic_error(fmt::format(
+              "The {} signing identity was published by the previous service "
+              "and cannot be dropped, as its endorsement chain would gap",
+              ccf::identity_type_name(identity_type)));
+          }
+          return true;
+        });
+
+      // The CLASSICAL signing identity is the service identity key. Older
+      // services which predate the signing identity tables are read back from
+      // the service certificate instead.
+      signing_identity_table->put(
+        IdentityType::CLASSICAL,
+        {IdentityKind::X509_SPKI_DER,
+         ccf::crypto::public_key_der_from_cert(service_cert_der)});
+      for (const auto& [identity_type, identity] : signing_identities)
+      {
+        signing_identity_table->put(identity_type, identity);
+      }
+
       service->put(
         {service_cert,
          recovering ? ServiceStatus::RECOVERING : ServiceStatus::OPENING,
@@ -576,8 +612,14 @@ namespace ccf
         service_info->cert == expected_service_cert;
     }
 
-    static bool endorse_previous_identity(
-      ccf::kv::Tx& tx, const ccf::crypto::ECKeyPair_OpenSSL& service_key)
+    // Writes the endorsement linking this epoch's identity of a given type to
+    // the same type in the previous epoch, so that receipts signed by the
+    // previous key remain verifiable. An identity with no predecessor
+    // self-endorses, starting its own chain.
+    static bool endorse_signing_identity(
+      ccf::kv::Tx& tx,
+      IdentityType identity_type,
+      const SigningIdentity& signing_identity)
     {
       auto* service = tx.ro<ccf::Service>(Tables::SERVICE);
       auto active_service = service->get();
@@ -586,38 +628,50 @@ namespace ccf
         tx.rw<ccf::PreviousServiceIdentityEndorsement>(
           ccf::Tables::PREVIOUS_SERVICE_IDENTITY_ENDORSEMENT);
 
+      if (
+        !active_service.has_value() ||
+        !active_service->current_service_create_txid.has_value())
+      {
+        throw std::logic_error(
+          "Active service or current_service_create_txid is not set");
+      }
+
+      const auto create_txid =
+        active_service->current_service_create_txid.value();
+
       ccf::CoseEndorsement endorsement{};
       std::vector<uint8_t> key_to_endorse{};
       std::vector<uint8_t> previous_root{};
 
-      endorsement.endorsing_key = service_key.public_key_der();
+      endorsement.endorsing_key = signing_identity.public_identity.value;
 
-      if (previous_identity_endorsement->has())
+      const auto prev_endorsement =
+        previous_identity_endorsement->get(identity_type);
+
+      // An identity created part-way through this epoch self-endorses when it
+      // is published, so opening the service must not chain it to itself.
+      if (
+        prev_endorsement.has_value() &&
+        !prev_endorsement->endorsement_epoch_end.has_value() &&
+        prev_endorsement->endorsement_epoch_begin.view == create_txid.view &&
+        prev_endorsement->endorsement_epoch_begin.seqno == create_txid.seqno)
       {
-        const auto prev_endorsement = previous_identity_endorsement->get();
-        if (!prev_endorsement.has_value())
-        {
-          throw std::logic_error("Failed to get previous endorsement");
-        }
+        return true;
+      }
 
-        if (
-          !active_service.has_value() ||
-          !active_service->current_service_create_txid.has_value())
-        {
-          throw std::logic_error(
-            "Active service or current_service_create_txid is not set");
-        }
-
+      if (prev_endorsement.has_value())
+      {
         endorsement.endorsement_epoch_begin =
           prev_endorsement->endorsement_epoch_end.has_value() ?
           next_tx_if_recovery(prev_endorsement->endorsement_epoch_end.value()) :
           prev_endorsement->endorsement_epoch_begin;
 
-        endorsement.endorsement_epoch_end = previous_tx_if_recovery(
-          active_service->current_service_create_txid.value());
+        endorsement.endorsement_epoch_end =
+          previous_tx_if_recovery(create_txid);
 
         endorsement.previous_version =
-          previous_identity_endorsement->get_version_of_previous_write();
+          previous_identity_endorsement->get_version_of_previous_write(
+            identity_type);
 
         key_to_endorse = prev_endorsement->endorsing_key;
 
@@ -645,18 +699,10 @@ namespace ccf
       else
       {
         // There's no `epoch_end` for the a self-endorsement, leave it
-        // open-ranged and sign the current service key.
-
-        if (
-          !active_service.has_value() ||
-          !active_service->current_service_create_txid.has_value())
-        {
-          throw std::logic_error(
-            "Active service or current_service_create_txid is not set");
-        }
-
-        endorsement.endorsement_epoch_begin =
-          active_service->current_service_create_txid.value();
+        // open-ranged and sign the current service key. An identity created
+        // part-way through an epoch is dated from the service creation, since
+        // no signature of that type can exist before it.
+        endorsement.endorsement_epoch_begin = create_txid;
 
         key_to_endorse = endorsement.endorsing_key;
       }
@@ -673,7 +719,10 @@ namespace ccf
           std::chrono::system_clock::now().time_since_epoch())
           .count();
 
-      auto key_der = service_key.private_key_der();
+      // Each chain is signed by its own identity, so an endorsement is only
+      // as strong as the algorithm it endorses.
+      auto signing_key = get_signing_key_pair(signing_identity);
+      auto key_der = signing_key->private_key_der();
       CoseBuffer key_err;
       auto cose_key =
         CoseKey::from_private(key_der.data(), key_der.size(), key_err);
@@ -707,7 +756,42 @@ namespace ccf
       }
       endorsement.endorsement = cose_buf.to_vector();
 
-      previous_identity_endorsement->put(endorsement);
+      previous_identity_endorsement->put(identity_type, endorsement);
+      return true;
+    }
+
+    // Endorses every identity this epoch publishes, each in its own chain.
+    static bool endorse_previous_identity(
+      ccf::kv::Tx& tx, const SigningIdentityMap& signing_identities)
+    {
+      auto* published_identities =
+        tx.ro<SigningIdentities>(Tables::SIGNING_IDENTITIES);
+
+      std::vector<IdentityType> to_endorse;
+      published_identities->foreach(
+        [&to_endorse](const auto& identity_type, const auto& /*identity*/) {
+          to_endorse.push_back(identity_type);
+          return true;
+        });
+
+      for (const auto identity_type : to_endorse)
+      {
+        const auto identity = signing_identities.find(identity_type);
+        if (identity == signing_identities.end())
+        {
+          LOG_FAIL_FMT(
+            "Cannot endorse the {} signing identity, which this node does not "
+            "hold",
+            ccf::identity_type_name(identity_type));
+          return false;
+        }
+
+        if (!endorse_signing_identity(tx, identity_type, identity->second))
+        {
+          return false;
+        }
+      }
+
       return true;
     }
 

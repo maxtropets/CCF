@@ -5,9 +5,11 @@
 #include "ccf/ds/json.h"
 #include "ccf/kv/serialisers/blit_serialiser.h"
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 namespace ccf
@@ -24,6 +26,21 @@ namespace ccf
     IdentityType,
     {{IdentityType::CLASSICAL, "CLASSICAL"}, {IdentityType::PQ, "PQ"}});
 
+  static constexpr std::array<IdentityType, 2> IDENTITY_TYPES = {
+    IdentityType::CLASSICAL, IdentityType::PQ};
+
+  constexpr std::string_view identity_type_name(IdentityType identity_type)
+  {
+    switch (identity_type)
+    {
+      case IdentityType::CLASSICAL:
+        return "CLASSICAL";
+      case IdentityType::PQ:
+        return "PQ";
+    }
+    throw std::logic_error("Unknown identity type");
+  }
+
   enum class IdentityKind : uint8_t
   {
     X509_CERT_DER = 0,
@@ -37,6 +54,8 @@ namespace ccf
 
   using IdentityValue = std::vector<uint8_t>;
 
+  // The kind is supplied by aggregate initialisation or required JSON fields.
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
   struct Identity
   {
     IdentityKind kind;

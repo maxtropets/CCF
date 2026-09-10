@@ -253,6 +253,17 @@ Service identity and status.
         WaitingForRecoveryShares -- member shares reassembly--> Open;
         Open-- "start in recovery"-->Recovering;
 
+``service.signing_identities``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Public keys for verifying service COSE signatures.
+
+**Key** Identity type as a little-endian 64-bit unsigned integer: ``CLASSICAL`` (0), ``PQ`` (1). The hybrid prototype uses an EC key as a mock ``PQ`` identity.
+
+**Value** JSON with ``kind`` set to ``"X509_SPKI_DER"`` and ``value`` containing the base64-encoded DER public key.
+
+For legacy ledgers, an empty table falls back to ``service.info.cert`` for ``CLASSICAL``.
+
 ``service.config``
 ~~~~~~~~~~~~~~~~~~
 
@@ -496,7 +507,7 @@ Signatures emitted by the primary node at regular interval, over the root of the
 
 COSE signatures over the Merkle root, keyed by service signing identity type.
 
-**Key** Identity type as a little-endian 64-bit unsigned integer. Only ``CLASSICAL`` (0) is currently populated; ``PQ`` (1) is reserved for future support.
+**Key** Identity type as a little-endian 64-bit unsigned integer: ``CLASSICAL`` (0), ``PQ`` (1). The default signing mask selects ``CLASSICAL``; the hybrid prototype also selects the mock ``PQ`` identity.
 
 **Value** A CBOR-encoded COSE Sign1 message, stored as a base64-encoded JSON string. Implements the following :ccf_repo:`CDDL schema </cddl/ccf-merkle-tree-cose-signature.cddl>`.
 
@@ -555,7 +566,7 @@ While the contents themselves are encrypted, the table is public so as to be acc
 ``previous_service_identity_endorsement``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Key** Sentinel value 0, represented as a little-endian 64-bit unsigned integer.
+**Key** Identity type as a little-endian 64-bit unsigned integer: ``CLASSICAL`` (0), ``PQ`` (1).
 
 **Value**
 

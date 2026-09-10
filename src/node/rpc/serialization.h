@@ -39,6 +39,7 @@ namespace ccf
     sealing_recovery_data,
     code_transparent_statement,
     ledger_sign_mode,
+    signing_identity_mask,
     join_fetch_count);
 
   DECLARE_JSON_TYPE(NetworkIdentity);
@@ -56,7 +57,9 @@ namespace ccf
     JoinNetworkNodeToNode::Out::NetworkInfo,
     service_status,
     endorsed_certificate,
-    cose_signatures_config);
+    cose_signatures_config,
+    signing_identities,
+    signing_seed);
 
   DECLARE_JSON_TYPE_WITH_OPTIONAL_FIELDS(JoinNetworkNodeToNode::Out);
   DECLARE_JSON_REQUIRED_FIELDS(JoinNetworkNodeToNode::Out, node_status);
@@ -83,7 +86,8 @@ namespace ccf
     service_data,
     snp_security_policy,
     snp_uvm_endorsements,
-    sealing_recovery_data);
+    sealing_recovery_data,
+    signing_identities);
 
   DECLARE_JSON_TYPE_WITH_OPTIONAL_FIELDS(GetCommit::Out);
   DECLARE_JSON_REQUIRED_FIELDS(GetCommit::Out, transaction_id);

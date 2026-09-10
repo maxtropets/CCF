@@ -7,6 +7,7 @@
 #include "crypto/openssl/ec_public_key.h"
 
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 
@@ -20,7 +21,6 @@ namespace ccf::crypto
     ECKeyPair_OpenSSL(const Pem& pem);
     ECKeyPair_OpenSSL(const JsonWebKeyECPrivate& jwk);
     ~ECKeyPair_OpenSSL() override = default;
-
     [[nodiscard]] Pem private_key_pem() const override;
     [[nodiscard]] Pem public_key_pem() const override;
     [[nodiscard]] std::vector<uint8_t> public_key_der() const override;
@@ -92,4 +92,15 @@ namespace ccf::crypto
       const std::vector<SubjectAltName>& subject_alt_names,
       const std::optional<Pem>& public_key) const;
   };
+
+  /** Deterministically derives an EC key pair from seed material, so that
+   * every holder of the same seed derives an identical key.
+   *
+   * @param curve_id Curve the derived key belongs to
+   * @param ikm Seed material the key is derived from
+   * @param label Domain separation label, distinguishing keys from one seed
+   * @return The derived key pair
+   */
+  std::shared_ptr<ECKeyPair_OpenSSL> derive_ec_key_pair(
+    CurveID curve_id, std::span<const uint8_t> ikm, const std::string& label);
 }

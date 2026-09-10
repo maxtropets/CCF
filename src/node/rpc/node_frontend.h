@@ -267,6 +267,77 @@ namespace ccf
       return duplicate_node_id;
     }
 
+    // A joining node may require signing identities the service has not
+    // published yet. Every node derives the same key from the epoch seed, so
+    // this only records the public key, in the same transaction which trusts
+    // the node, and reverts with it if that transaction fails.
+    std::optional<std::string> provision_signing_identities(
+      ccf::kv::Tx& tx, ccf::SigningIdentityMask joiner_mask)
+    {
+      auto* published_identities =
+        tx.rw<SigningIdentities>(Tables::SIGNING_IDENTITIES);
+
+      // The CLASSICAL signing identity is the service identity key, so it can
+      // always be recovered from the network identity even if this node has
+      // not recorded it separately.
+      if (
+        ccf::is_signing_identity_selected(
+          joiner_mask, IdentityType::CLASSICAL) &&
+        !network.signing_identities.contains(IdentityType::CLASSICAL) &&
+        network.identity != nullptr)
+      {
+        network.signing_identities.emplace(
+          IdentityType::CLASSICAL,
+          make_signing_identity(network.identity->get_key_pair()));
+      }
+
+      for (const auto identity_type : IDENTITY_TYPES)
+      {
+        if (!ccf::is_signing_identity_selected(joiner_mask, identity_type))
+        {
+          continue;
+        }
+
+        const auto held = network.signing_identities.find(identity_type);
+        if (held == network.signing_identities.end())
+        {
+          return fmt::format(
+            "This node cannot provide the {} signing identity required by the "
+            "joining node",
+            ccf::identity_type_name(identity_type));
+        }
+
+        const auto published = published_identities->get(identity_type);
+        if (!published.has_value())
+        {
+          LOG_INFO_FMT(
+            "Publishing {} service signing identity for joining node",
+            ccf::identity_type_name(identity_type));
+          published_identities->put(
+            identity_type, held->second.public_identity);
+
+          // A new identity starts its own endorsement chain here, so that
+          // receipts it later signs can be traced back to this epoch.
+          if (!InternalTablesAccess::endorse_signing_identity(
+                tx, identity_type, held->second))
+          {
+            return fmt::format(
+              "Failed to endorse the newly published {} signing identity",
+              ccf::identity_type_name(identity_type));
+          }
+        }
+        else if (published.value() != held->second.public_identity)
+        {
+          return fmt::format(
+            "The published {} signing identity does not match the one held by "
+            "this node",
+            ccf::identity_type_name(identity_type));
+        }
+      }
+
+      return std::nullopt;
+    }
+
     auto add_node(
       ccf::kv::Tx& tx,
       const std::vector<uint8_t>& node_der,
@@ -384,6 +455,18 @@ namespace ccf
 
       if (node_status == NodeStatus::TRUSTED)
       {
+        const auto provisioning_error = provision_signing_identities(
+          tx,
+          in.signing_identity_mask.value_or(
+            ccf::DEFAULT_SIGNING_IDENTITY_MASK));
+        if (provisioning_error.has_value())
+        {
+          return make_error(
+            HTTP_STATUS_INTERNAL_SERVER_ERROR,
+            ccf::errors::InternalError,
+            provisioning_error.value());
+        }
+
         node_operation.shuffle_sealed_shares(tx);
         // Joining node only submit a CSR from 2.x
         std::optional<ccf::crypto::Pem> endorsed_certificate = std::nullopt;
@@ -411,7 +494,9 @@ namespace ccf
           *this->network.identity,
           service_status,
           endorsed_certificate,
-          node_operation.get_cose_signatures_config()};
+          node_operation.get_cose_signatures_config(),
+          this->network.signing_identities,
+          this->network.signing_seed};
       }
       return make_success(rep);
     }
@@ -506,6 +591,18 @@ namespace ccf
           rep.node_id = existing_node_info->node_id;
           if (node_status == NodeStatus::TRUSTED)
           {
+            const auto provisioning_error = provision_signing_identities(
+              args.tx,
+              in.signing_identity_mask.value_or(
+                ccf::DEFAULT_SIGNING_IDENTITY_MASK));
+            if (provisioning_error.has_value())
+            {
+              return make_error(
+                HTTP_STATUS_INTERNAL_SERVER_ERROR,
+                ccf::errors::InternalError,
+                provisioning_error.value());
+            }
+
             rep.network_info = JoinNetworkNodeToNode::Out::NetworkInfo(
               node_operation.is_part_of_public_network(),
               node_operation.get_last_recovered_signed_idx(),
@@ -514,7 +611,9 @@ namespace ccf
               *this->network.identity,
               active_service->status,
               existing_node_info->endorsed_certificate,
-              node_operation.get_cose_signatures_config());
+              node_operation.get_cose_signatures_config(),
+              this->network.signing_identities,
+              this->network.signing_seed);
 
             LOG_DEBUG_FMT(
               "Join request accepted: {} already marked as TRUSTED",
@@ -1555,7 +1654,12 @@ namespace ccf
         }
 
         InternalTablesAccess::create_service(
-          ctx.tx, in.service_cert, in.create_txid, in.service_data, recovering);
+          ctx.tx,
+          in.service_cert,
+          in.create_txid,
+          in.service_data,
+          recovering,
+          in.signing_identities);
 
         if (recovering)
         {

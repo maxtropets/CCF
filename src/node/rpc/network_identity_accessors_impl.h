@@ -6,6 +6,7 @@
 #include "node/historical_queries.h"
 #include "node/rpc/network_identity_accessors.h"
 #include "node/rpc/node_interface.h"
+#include "service/tables/previous_service_identity.h"
 #include "tasks/basic_task.h"
 #include "tasks/task_system.h"
 
@@ -59,7 +60,7 @@ namespace ccf
       result.endorsement =
         tx.template ro<ccf::PreviousServiceIdentityEndorsement>(
             ccf::Tables::PREVIOUS_SERVICE_IDENTITY_ENDORSEMENT)
-          ->get();
+          ->get(ccf::IdentityType::CLASSICAL);
 
       return result;
     }
@@ -98,7 +99,7 @@ namespace ccf
         htx
           .template ro<ccf::PreviousServiceIdentityEndorsement>(
             ccf::Tables::PREVIOUS_SERVICE_IDENTITY_ENDORSEMENT)
-          ->get();
+          ->get(ccf::IdentityType::CLASSICAL);
       if (!endorsement.has_value())
       {
         throw std::runtime_error(fmt::format(

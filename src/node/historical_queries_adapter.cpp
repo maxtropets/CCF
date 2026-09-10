@@ -11,6 +11,7 @@
 #include "kv/kv_types.h"
 #include "node/rpc/network_identity_subsystem.h"
 #include "node/tx_receipt_impl.h"
+#include "service/tables/signatures.h"
 
 #include <tav/cbor.hpp>
 

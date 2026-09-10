@@ -98,7 +98,8 @@ namespace ccf
 
   // Resolve the latest signature view from both signature tables.
   // In a mixed dual/COSE-only ledger, the traditional signature table may
-  // contain a stale entry from before the switch to COSE-only. Always pick
+  // contain a stale entry from before the switch to COSE-only. Signing
+  // identities may also have been written at different seqnos. Always pick
   // the signature at the higher seqno.
   inline ccf::kv::Term resolve_latest_sig_view(ccf::kv::ReadOnlyTx& tx)
   {
@@ -112,24 +113,25 @@ namespace ccf
       best_view = ls->view;
     }
 
-    auto lcs = tx.ro<ccf::CoseSignatures>(Tables::COSE_SIGNATURES)
-                 ->get(ccf::IdentityType::CLASSICAL);
-    if (lcs.has_value())
-    {
-      auto receipt = cose::decode_ccf_receipt(lcs.value(), false);
-      auto tx_id_opt = ccf::TxID::from_str(receipt.phdr.ccf.txid);
-      if (!tx_id_opt.has_value())
-      {
-        throw std::logic_error(fmt::format(
-          "Failed to parse TxID from COSE signature: {}",
-          receipt.phdr.ccf.txid));
-      }
-      if (tx_id_opt->seqno > best_seqno)
-      {
-        best_seqno = tx_id_opt->seqno;
-        best_view = tx_id_opt->view;
-      }
-    }
+    tx.ro<ccf::CoseSignatures>(Tables::COSE_SIGNATURES)
+      ->foreach([&best_seqno, &best_view](
+                  const auto& identity_type, const auto& cose_signature) {
+        auto receipt = cose::decode_ccf_receipt(cose_signature, false);
+        auto tx_id_opt = ccf::TxID::from_str(receipt.phdr.ccf.txid);
+        if (!tx_id_opt.has_value())
+        {
+          throw std::logic_error(fmt::format(
+            "Failed to parse TxID from {} COSE signature: {}",
+            ccf::identity_type_name(identity_type),
+            receipt.phdr.ccf.txid));
+        }
+        if (tx_id_opt->seqno > best_seqno)
+        {
+          best_seqno = tx_id_opt->seqno;
+          best_view = tx_id_opt->view;
+        }
+        return true;
+      });
 
     if (best_seqno == 0)
     {
@@ -782,6 +784,102 @@ namespace ccf
 
     RecoveryDecisionProtocolSubsystem recovery_decision_protocol;
 
+    // Creates every signing identity this node can hold. CLASSICAL is the
+    // service identity key itself; every other identity is derived from the
+    // epoch seed, so any node holding the seed derives the same key and can
+    // serve any identity type, whether or not it signs with it.
+    void populate_signing_identities()
+    {
+      if (!network.identity)
+      {
+        throw std::logic_error(
+          "Cannot populate signing identities without a network identity");
+      }
+
+      network.signing_identities.insert_or_assign(
+        IdentityType::CLASSICAL,
+        make_signing_identity(network.identity->get_key_pair()));
+
+      if (network.signing_seed.empty())
+      {
+        // Joined from a node which predates the signing seed. Only the
+        // identities explicitly shared by that node are available.
+        return;
+      }
+
+      for (const auto identity_type : IDENTITY_TYPES)
+      {
+        if (identity_type == IdentityType::CLASSICAL)
+        {
+          continue;
+        }
+        network.signing_identities.insert_or_assign(
+          identity_type,
+          derive_signing_identity(network.signing_seed, identity_type));
+      }
+    }
+
+    // Public material of the identities this epoch publishes: the ones it
+    // signs with, plus every one the previous epoch had. Identities are never
+    // dropped, because a gap in an endorsement chain cannot be bridged later.
+    // Carrying one forward is always possible, since every identity is
+    // derived from the seed this node holds.
+    Identities signing_identities_to_publish() const
+    {
+      const auto mask = ccf::get_signing_identity_mask();
+      Identities identities;
+
+      for (const auto& [identity_type, identity] : network.signing_identities)
+      {
+        if (ccf::is_signing_identity_selected(mask, identity_type))
+        {
+          identities.emplace(identity_type, identity.public_identity);
+        }
+      }
+
+      auto tx = network.tables->create_read_only_tx();
+      tx.ro<SigningIdentities>(Tables::SIGNING_IDENTITIES)
+        ->foreach([this, &identities](
+                    const auto& identity_type, const auto& /*identity*/) {
+          if (identities.contains(identity_type))
+          {
+            return true;
+          }
+
+          const auto held = network.signing_identities.find(identity_type);
+          if (held == network.signing_identities.end())
+          {
+            throw std::logic_error(fmt::format(
+              "Cannot carry the {} signing identity into the new service, as "
+              "this node cannot derive it",
+              ccf::identity_type_name(identity_type)));
+          }
+          identities.emplace(identity_type, held->second.public_identity);
+          return true;
+        });
+
+      return identities;
+    }
+
+    // A node can only sign with identities it holds. Fail fast, rather than
+    // discovering this when the node becomes primary.
+    void check_signing_identities_available() const
+    {
+      const auto mask = ccf::get_signing_identity_mask();
+      for (const auto identity_type : IDENTITY_TYPES)
+      {
+        if (
+          ccf::is_signing_identity_selected(mask, identity_type) &&
+          !network.signing_identities.contains(identity_type))
+        {
+          throw std::logic_error(fmt::format(
+            "This node is configured to sign with the {} identity, which this "
+            "service does not have",
+            ccf::identity_type_name(identity_type)));
+        }
+      }
+    }
+
   public:
     NodeState(
       ringbuffer::AbstractWriterFactory& writer_factory,
@@ -1190,11 +1288,13 @@ namespace ccf
             curve_id,
             config.startup_host_time,
             config.initial_service_certificate_validity_days);
+          network.signing_seed = create_signing_seed();
+          populate_signing_identities();
 
           network.ledger_secrets->init();
 
-          history->set_service_signing_identity(
-            network.identity->get_key_pair(), config.cose_signatures);
+          history->set_service_signing_identities(
+            network.signing_identities, config.cose_signatures);
 
           setup_consensus(false);
 
@@ -1232,6 +1332,8 @@ namespace ccf
             curve_id,
             config.startup_host_time,
             config.initial_service_certificate_validity_days);
+          network.signing_seed = create_signing_seed();
+          populate_signing_identities();
 
           initiate_quote_generation();
 
@@ -1294,6 +1396,7 @@ namespace ccf
         config.node_certificate.subject_name, subject_alt_names);
       join_params.node_data = config.node_data;
       join_params.ledger_sign_mode = ccf::get_ledger_sign_mode();
+      join_params.signing_identity_mask = ccf::get_signing_identity_mask();
       if (config.sealing_recovery.has_value() && snp_tcb_version.has_value())
       {
         join_params.sealing_recovery_data = std::make_pair(
@@ -1627,11 +1730,24 @@ namespace ccf
 
                 network.identity = std::make_unique<ccf::NetworkIdentity>(
                   resp.network_info->identity);
+                // Prefer the seed, which lets this node derive every
+                // identity. Fall back to the explicitly shared keys when
+                // joining a node which predates the seed.
+                network.signing_identities =
+                  resp.network_info->signing_identities.value_or(
+                    SigningIdentityMap{});
+                if (resp.network_info->signing_seed.has_value())
+                {
+                  network.signing_seed =
+                    resp.network_info->signing_seed.value();
+                }
+                populate_signing_identities();
+                check_signing_identities_available();
                 network.ledger_secrets->init_from_map(
                   std::move(resp.network_info->ledger_secrets));
 
-                history->set_service_signing_identity(
-                  network.identity->get_key_pair(),
+                history->set_service_signing_identities(
+                  network.signing_identities,
                   resp.network_info->cose_signatures_config.value_or(
                     ccf::COSESignaturesConfig{}));
 
@@ -2103,8 +2219,8 @@ namespace ccf
           "Use a COSE-only binary to recover this ledger.");
       }
 
-      history->set_service_signing_identity(
-        network.identity->get_key_pair(), cs_cfg);
+      history->set_service_signing_identities(
+        network.signing_identities, cs_cfg);
 
       auto* h = dynamic_cast<MerkleTxHistory*>(history.get());
       if (h != nullptr)
@@ -2333,7 +2449,7 @@ namespace ccf
         if (
           !InternalTablesAccess::open_service(tx) ||
           !InternalTablesAccess::endorse_previous_identity(
-            tx, *network.identity->get_key_pair()))
+            tx, network.signing_identities))
         {
           throw std::logic_error("Service could not be opened");
         }
@@ -2625,7 +2741,7 @@ namespace ccf
 
         InternalTablesAccess::open_service(tx);
         InternalTablesAccess::endorse_previous_identity(
-          tx, *network.identity->get_key_pair());
+          tx, network.signing_identities);
         trigger_snapshot(tx);
         return;
       }
@@ -3023,6 +3139,7 @@ namespace ccf
 
       create_params.public_key = node_sign_kp->public_key_pem();
       create_params.service_cert = network.identity->cert;
+      create_params.signing_identities = signing_identities_to_publish();
       create_params.quote_info = quote_info;
       create_params.public_encryption_key = node_encrypt_kp->public_key_pem();
       create_params.measurement = node_measurement;
@@ -3438,7 +3555,6 @@ namespace ccf
             {
               throw std::logic_error("Unexpected deletion in service value");
             }
-
             // Service open on historical service has no effect
             auto hook_pubk_pem = ccf::crypto::public_key_pem_from_cert(
               ccf::crypto::cert_pem_to_der(w->cert));

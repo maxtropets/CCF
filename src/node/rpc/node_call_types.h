@@ -17,6 +17,7 @@
 #include "enclave/interface.h"
 #include "node/identity.h"
 #include "node/ledger_secrets.h"
+#include "node/signing_identity_mask.h"
 #include "node/uvm_endorsements.h"
 
 #include <nlohmann/json.hpp>
@@ -75,6 +76,8 @@ namespace ccf
       ccf::TxID create_txid;
       std::optional<std::pair<SealedRecoveryKey, sealing_recovery::Name>>
         sealing_recovery_data = std::nullopt;
+      // Public material of the service's signing identities
+      Identities signing_identities;
 
       // Only set on genesis transaction, but not on recovery
       std::optional<ccf::StartupConfig::Start> genesis_info = std::nullopt;
@@ -97,6 +100,10 @@ namespace ccf
       std::optional<std::vector<uint8_t>> code_transparent_statement =
         std::nullopt;
       std::optional<ccf::LedgerSignMode> ledger_sign_mode = std::nullopt;
+      // Signing identities this node requires. The primary creates any the
+      // service does not have yet, as part of the join transaction.
+      std::optional<ccf::SigningIdentityMask> signing_identity_mask =
+        std::nullopt;
       // Incremented by the joiner each time it retries a join request after
       // receiving a StartupSeqnoIsOld response.
       std::optional<uint32_t> join_fetch_count = std::nullopt;
@@ -120,6 +127,13 @@ namespace ccf
         std::optional<ccf::crypto::Pem> endorsed_certificate = std::nullopt;
         std::optional<ccf::COSESignaturesConfig> cose_signatures_config =
           std::nullopt;
+        // Private material of the service's signing identities, shared with
+        // trusted nodes so that any of them can sign as primary.
+        std::optional<SigningIdentityMap> signing_identities = std::nullopt;
+        // Seed the joining node derives its signing identities from. Kept
+        // alongside signing_identities so that nodes which predate the seed
+        // still receive usable keys.
+        std::optional<SigningSeed> signing_seed = std::nullopt;
 
         NetworkInfo() = default;
 
@@ -130,14 +144,18 @@ namespace ccf
           const NetworkIdentity& identity,
           ServiceStatus service_status,
           std::optional<ccf::crypto::Pem> endorsed_certificate,
-          std::optional<ccf::COSESignaturesConfig> cose_signatures_config_) :
+          std::optional<ccf::COSESignaturesConfig> cose_signatures_config_,
+          std::optional<SigningIdentityMap> signing_identities_ = std::nullopt,
+          std::optional<SigningSeed> signing_seed_ = std::nullopt) :
           public_only(public_only),
           last_recovered_signed_idx(last_recovered_signed_idx),
           ledger_secrets(std::move(ledger_secrets)),
           identity(identity),
           service_status(service_status),
           endorsed_certificate(std::move(endorsed_certificate)),
-          cose_signatures_config(std::move(cose_signatures_config_))
+          cose_signatures_config(std::move(cose_signatures_config_)),
+          signing_identities(std::move(signing_identities_)),
+          signing_seed(std::move(signing_seed_))
         {}
 
         bool operator==(const NetworkInfo& other) const

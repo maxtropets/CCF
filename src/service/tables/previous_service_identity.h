@@ -4,6 +4,8 @@
 
 #include "ccf/crypto/pem.h"
 #include "ccf/kv/value.h"
+#include "ccf/service/map.h"
+#include "service/tables/identity_types.h"
 
 #include <string>
 #include <vector>
@@ -41,7 +43,12 @@ namespace ccf
   DECLARE_JSON_OPTIONAL_FIELDS(
     CoseEndorsement, previous_version, endorsement_epoch_end);
 
-  using PreviousServiceIdentityEndorsement = ServiceValue<CoseEndorsement>;
+  // One endorsement chain per signing identity, so a receipt from a previous
+  // epoch is verified with the key of the same identity type which was live
+  // then. CLASSICAL is 0, so its key matches the single-value table which
+  // preceded multiple signing identities.
+  using PreviousServiceIdentityEndorsement =
+    ServiceMap<IdentityType, CoseEndorsement>;
 
   namespace Tables
   {

@@ -30,3 +30,12 @@ add_ccf_app(
     get_ledger_sign_mode_cose_allow_join_dual.cpp
     ../main.cpp
 )
+
+add_ccf_app(
+  logging_hybrid_signing
+  SRCS
+    logging.cpp
+    create_tx_claims_digest.cpp
+    get_signing_identity_mask_hybrid.cpp
+    ../main.cpp
+)
